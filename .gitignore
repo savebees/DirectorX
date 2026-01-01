@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Runtime output
+.video-index/
+artifacts/
+data/
+
+# Local source media
+media/music/*
+media/videos/*
+!media/music/.gitkeep
+!media/videos/.gitkeep
+*.nfo
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

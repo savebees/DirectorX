@@ -1,0 +1,61 @@
+[paths]
+cache_dir = ".video-index"
+music_dir = "media/music"
+artifacts_dir = "artifacts"
+
+[indexing]
+detector = "adaptive"
+keyframe_positions = [0.2, 0.5, 0.8]
+frame_workers = 4
+max_scene_duration_s = 15.0
+annotation_batch_size = 32
+
+[transcription]
+provider = "subtitles"
+subtitle_path = "media/videos/Casino.Royale.movie/Subs/5_English.srt"
+subtitle_encoding = "utf-8-sig"
+whisper_model = "large-v3-turbo"
+whisper_device = "auto"
+whisper_compute_type = "default"
+language = "eng"
+
+[embedding]
+provider = "sentence-transformers"
+model = "BAAI/bge-small-zh-v1.5"
+hashing_dimension = 256
+
+[vlm]
+provider = "openai-compatible"
+model = "Qwen/Qwen3.6-35B-A3B"
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+workers = 2
+timeout_s = 180.0
+retries = 3
+max_tokens = 1200
+max_frames_per_scene = 3
+max_image_dimension = 1024
+request_interval_s = 2.0
+
+[llm]
+provider = "openai-compatible"
+base_url = "https://vyceai.com/v1"
+api_key_env = "VYCE_API_KEY"
+screenwriter_model = "gpt-5.6"
+screenwriter_max_tokens = 4000
+timeout_s = 180.0
+retries = 3
+
+[tts]
+provider = "edge"
+voice = "zh-CN-XiaoxiaoNeural"
+rate = 185
+
+[render]
+enabled = false
+aspect = "landscape"
+fps = 30
+video_codec = "libx264"
+
+[edit]
+target_duration_s = 60.0
