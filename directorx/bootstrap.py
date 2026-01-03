@@ -5,29 +5,32 @@ from dataclasses import dataclass
 from directorx.config import AppConfig
 from directorx.core.ports import EmbeddingProvider, Transcriber
 from directorx.indexing import (
+    AutoTranscriber,
     EmbeddedSubtitleTranscriber,
     FasterWhisperTranscriber,
     FFmpegKeyframeExtractor,
     HashingEmbeddingProvider,
     HybridVideoIndexer,
     NullTranscriber,
-    OpenAICompatibleSceneAnnotator,
+    OpenAICompatibleDenseCaptioner,
     PySceneDetectDetector,
     SentenceTransformerEmbeddingProvider,
     SidecarSubtitleTranscriber,
 )
+from directorx.services.providers import OpenAICompatibleSceneTagger
 
 
 @dataclass(frozen=True)
 class IndexingRuntime:
     embedding: EmbeddingProvider
-    annotator: OpenAICompatibleSceneAnnotator
+    captioner: OpenAICompatibleDenseCaptioner
+    tagger: OpenAICompatibleSceneTagger
     indexer: HybridVideoIndexer
 
 
 def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
     embedding = _create_embedding(config)
-    annotator = OpenAICompatibleSceneAnnotator(
+    captioner = OpenAICompatibleDenseCaptioner(
         model=config.vlm.model,
         base_url=config.vlm.base_url,
         api_key_env=config.vlm.api_key_env,
@@ -39,43 +42,58 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         max_image_dimension=config.vlm.max_image_dimension,
         request_interval_s=config.vlm.request_interval_s,
     )
+    tagger = OpenAICompatibleSceneTagger(
+        model=config.llm.scene_tagger_model,
+        base_url=config.llm.base_url,
+        api_key_env=config.llm.api_key_env,
+        max_tokens=config.llm.scene_tagger_max_tokens,
+        timeout_s=config.llm.timeout_s,
+        max_retries=config.llm.retries,
+    )
     indexer = HybridVideoIndexer(
         cache_dir=config.resolve(config.paths.cache_dir),
-        scene_detector=PySceneDetectDetector(detector=config.indexing.detector),
+        scene_detector=PySceneDetectDetector(),
         transcriber=_create_transcriber(config),
         keyframe_extractor=FFmpegKeyframeExtractor(
             positions=tuple(config.indexing.keyframe_positions),
             max_parallel=config.indexing.frame_workers,
         ),
-        annotator=annotator,
+        captioner=captioner,
+        tagger=tagger,
         embedding_provider=embedding,
         max_scene_duration_s=config.indexing.max_scene_duration_s,
-        annotation_batch_size=config.indexing.annotation_batch_size,
+        batch_size=config.indexing.batch_size,
     )
     return IndexingRuntime(
         embedding=embedding,
-        annotator=annotator,
+        captioner=captioner,
+        tagger=tagger,
         indexer=indexer,
     )
 
 
 def _create_transcriber(config: AppConfig) -> Transcriber:
+    sidecar = SidecarSubtitleTranscriber(
+        (
+            config.resolve(config.transcription.subtitle_path)
+            if config.transcription.subtitle_path is not None
+            else None
+        ),
+        encoding=config.transcription.subtitle_encoding,
+    )
+    whisper = FasterWhisperTranscriber(
+        config.transcription.whisper_model,
+        device=config.transcription.whisper_device,
+        compute_type=config.transcription.whisper_compute_type,
+        language=config.transcription.language,
+    )
     factories = {
-        "subtitles": lambda: SidecarSubtitleTranscriber(
-            (
-                config.resolve(config.transcription.subtitle_path)
-                if config.transcription.subtitle_path is not None
-                else None
-            ),
-            encoding=config.transcription.subtitle_encoding,
+        "auto": lambda: AutoTranscriber(
+            sidecar, EmbeddedSubtitleTranscriber(), whisper
         ),
+        "subtitles": lambda: sidecar,
         "embedded": EmbeddedSubtitleTranscriber,
-        "whisper": lambda: FasterWhisperTranscriber(
-            config.transcription.whisper_model,
-            device=config.transcription.whisper_device,
-            compute_type=config.transcription.whisper_compute_type,
-            language=config.transcription.language,
-        ),
+        "whisper": lambda: whisper,
         "none": NullTranscriber,
     }
     return factories[config.transcription.provider]()

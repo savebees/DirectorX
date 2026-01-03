@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import json
 import subprocess
 from pathlib import Path
 
@@ -9,16 +9,18 @@ from directorx.core.models import (
     DialogueLine,
     Keyframe,
     Scene,
-    SceneAnnotation,
+    SceneTags,
     TimeRange,
 )
 from directorx.indexing import (
+    AutoTranscriber,
     HashingEmbeddingProvider,
     HybridVideoIndexer,
     SceneSearchStore,
     SceneSearchTools,
     SidecarSubtitleTranscriber,
 )
+from directorx.indexing.backends import NoEmbeddedSubtitleError
 
 
 def _make_video(path: Path, duration: int = 12) -> None:
@@ -65,6 +67,21 @@ class FixedTranscriber:
         ]
 
 
+class MissingSidecar:
+    async def transcribe(self, video_path: Path) -> list[DialogueLine]:
+        raise FileNotFoundError(video_path)
+
+
+class MissingEmbedded:
+    async def transcribe(self, video_path: Path) -> list[DialogueLine]:
+        raise NoEmbeddedSubtitleError(video_path)
+
+
+class FixedWhisper:
+    async def transcribe(self, video_path: Path) -> list[DialogueLine]:
+        return [DialogueLine(text="ASR", start_s=0, end_s=1)]
+
+
 class FakeKeyframes:
     def __init__(self) -> None:
         self.calls = 0
@@ -84,27 +101,34 @@ class FakeKeyframes:
         return result
 
 
-class FixedAnnotator:
+class FixedCaptioner:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def annotate_batch(self, scenes: list[Scene]) -> dict[str, SceneAnnotation]:
+    async def caption_batch(self, scenes: list[Scene]) -> dict[str, str]:
         self.calls += 1
         captions = [
             "主角进入昏暗仓库",
             "主角在桌下发现秘密箱子",
             "两人在黎明前逃离仓库",
         ]
+        return {scene.id: captions[index] for index, scene in enumerate(scenes)}
+
+
+class FixedTagger:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def tag_batch(self, scenes: list[Scene]) -> dict[str, SceneTags]:
+        self.calls += 1
         return {
-            scene.id: SceneAnnotation(
-                caption=captions[index],
+            scene.id: SceneTags(
+                caption=scene.dense_caption,
                 tags=["仓库", "悬疑"],
                 characters=["主角"],
                 actions=["寻找" if index == 1 else "移动"],
                 location="仓库",
-                mood_scores={"tense": 0.8},
-                plot_event="发现线索" if index == 1 else None,
-                confidence=0.9,
+                objects=["秘密箱子"] if index == 1 else [],
             )
             for index, scene in enumerate(scenes)
         }
@@ -149,6 +173,16 @@ def test_sidecar_subtitles_discover_preferred_language_and_parse(
     assert explicit[0].text == "Bonjour."
 
 
+def test_auto_transcriber_falls_back_to_whisper_when_no_subtitles() -> None:
+    lines = asyncio.run(
+        AutoTranscriber(MissingSidecar(), MissingEmbedded(), FixedWhisper()).transcribe(
+            Path("movie.mp4")
+        )
+    )
+
+    assert [line.text for line in lines] == ["ASR"]
+
+
 def test_screenwriter_context_covers_entire_feature() -> None:
     scenes = [
         Scene(
@@ -169,47 +203,47 @@ def test_screenwriter_context_covers_entire_feature() -> None:
     assert selected[-1].source_range.start_s > 3800
 
 
-def test_hybrid_index_cache_and_search_tools(tmp_path: Path, monkeypatch) -> None:
+def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     video = tmp_path / "movie.mp4"
     _make_video(video)
     detector = FixedDetector()
     transcriber = FixedTranscriber()
     keyframes = FakeKeyframes()
-    annotator = FixedAnnotator()
+    captioner = FixedCaptioner()
+    tagger = FixedTagger()
     embeddings = HashingEmbeddingProvider(dimension=128)
     indexer = HybridVideoIndexer(
         cache_dir=tmp_path / "index-cache",
         scene_detector=detector,
         transcriber=transcriber,
         keyframe_extractor=keyframes,
-        annotator=annotator,
+        captioner=captioner,
+        tagger=tagger,
         embedding_provider=embeddings,
     )
 
     first = asyncio.run(indexer.build(video))
     assert len(first.scenes) == 3
     assert first.scenes[1].transcript == "我们必须找到秘密箱子"
-    assert first.scenes[1].mood == "tense"
+    assert first.scenes[1].dense_caption == "主角在桌下发现秘密箱子"
+    assert first.scenes[1].objects == ["秘密箱子"]
     assert first.search_db_path and first.search_db_path.exists()
 
-    def unexpected_hash(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
-        raise AssertionError("unchanged path metadata should not re-hash the movie")
-
-    monkeypatch.setattr(indexer.cache, "_sha256", unexpected_hash)
     second = asyncio.run(indexer.build(video))
-    assert second.content_fingerprint == first.content_fingerprint
     assert (
-        detector.calls == transcriber.calls == keyframes.calls == annotator.calls == 1
+        detector.calls == transcriber.calls == keyframes.calls == captioner.calls == tagger.calls == 1
     )
 
-    monkeypatch.undo()
-    current = video.stat()
-    os.utime(video, ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000))
-    third = asyncio.run(indexer.build(video))
-    assert third.content_fingerprint == first.content_fingerprint
+    moved_video = tmp_path / "moved" / video.name
+    moved_video.parent.mkdir()
+    moved_video.write_bytes(video.read_bytes())
+    third = asyncio.run(indexer.build(moved_video))
+    assert third.video_path == moved_video.resolve()
     assert (
-        detector.calls == transcriber.calls == keyframes.calls == annotator.calls == 1
+        detector.calls == transcriber.calls == keyframes.calls == captioner.calls == tagger.calls == 1
     )
+    registry = json.loads((tmp_path / "index-cache" / "registry.json").read_text())
+    assert registry[video.name]["index_dir"] == f"indexes/{video.name}"
 
     tools = SceneSearchTools(SceneSearchStore(first.search_db_path, embeddings))
     scene_hits = asyncio.run(tools.search_scenes("发现秘密箱子", limit=2))

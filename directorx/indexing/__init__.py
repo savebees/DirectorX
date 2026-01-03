@@ -1,11 +1,13 @@
 """Video indexing and scene-search infrastructure."""
 
 from .backends import (
+    AutoTranscriber,
     EmbeddedSubtitleTranscriber,
     FasterWhisperTranscriber,
     FFmpegKeyframeExtractor,
     HashingEmbeddingProvider,
     NullTranscriber,
+    NoEmbeddedSubtitleError,
     PySceneDetectDetector,
     SentenceTransformerEmbeddingProvider,
     SidecarSubtitleTranscriber,
@@ -13,16 +15,18 @@ from .backends import (
 from .indexer import HybridVideoIndexer
 from .store import SceneSearchStore
 from .tools import SceneSearchTools
-from .vlm import OpenAICompatibleSceneAnnotator
+from .vlm import OpenAICompatibleDenseCaptioner
 
 __all__ = [
     "EmbeddedSubtitleTranscriber",
+    "AutoTranscriber",
     "FFmpegKeyframeExtractor",
     "FasterWhisperTranscriber",
     "HashingEmbeddingProvider",
     "HybridVideoIndexer",
-    "OpenAICompatibleSceneAnnotator",
+    "OpenAICompatibleDenseCaptioner",
     "NullTranscriber",
+    "NoEmbeddedSubtitleError",
     "PySceneDetectDetector",
     "SceneSearchStore",
     "SceneSearchTools",

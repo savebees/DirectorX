@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from directorx.core.models import (
-    CandidateScore,
     MusicTrack,
     Scene,
-    ShotRequest,
+    SceneTags,
     Storyboard,
     VideoIndex,
 )
-from directorx.indexing.vlm import OpenAICompatibleSceneAnnotator
 
 
 def _probe_duration(path: Path) -> float:
@@ -117,7 +117,7 @@ class OpenAICompatibleScreenwriterModel:
 
     @staticmethod
     def _select_context_scenes(scenes: list[Scene], limit: int) -> list[Scene]:
-        """Keep planner context bounded while preserving dialogue and plot evidence."""
+        """Keep planner context bounded while preserving visual and dialogue evidence."""
         if len(scenes) <= limit:
             return scenes
         # Divide the film into temporal buckets instead of taking a prefix. This
@@ -129,12 +129,106 @@ class OpenAICompatibleScreenwriterModel:
             start = bucket * scene_count // limit
             end = max(start + 1, (bucket + 1) * scene_count // limit)
             candidates = scenes[start:end]
-            evidence = [scene for scene in candidates if scene.plot_event]
+            evidence = [scene for scene in candidates if scene.dense_caption]
             if not evidence:
                 evidence = [scene for scene in candidates if scene.transcript]
             pool = evidence or candidates
             selected.append(pool[len(pool) // 2])
         return selected
+
+
+class OpenAICompatibleSceneTagger:
+    """Normalize a scene's visual caption and transcript into retrieval tags."""
+
+    SYSTEM_PROMPT = """You normalize video scene metadata for retrieval.
+Use only the supplied transcript and dense visual caption. Do not infer hidden
+events, identities, motives, or plot facts. Return concise normalized metadata:
+- caption: one factual sentence
+- tags: 5-12 short searchable keywords or noun phrases
+- characters: observable people or stable generic labels
+- actions: visible actions
+- location: one concise location or null
+- objects: visible searchable objects
+Avoid duplicates, vague adjectives, and speculative labels. Return only the JSON object."""
+
+    def __init__(
+        self,
+        *,
+        model: str = "gpt-5.6",
+        base_url: str = "https://vyceai.com/v1",
+        api_key_env: str = "VYCE_API_KEY",
+        max_tokens: int = 1200,
+        timeout_s: float = 120.0,
+        max_retries: int = 3,
+        client: Any | None = None,
+    ) -> None:
+        if max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
+        secret = os.environ.get(api_key_env, "")
+        if client is not None:
+            self._client = client
+        else:
+            if not secret:
+                raise RuntimeError(
+                    f"Missing tagger API key. Set {api_key_env} in the environment"
+                )
+            try:
+                from openai import AsyncOpenAI
+            except ImportError as exc:
+                raise RuntimeError(
+                    "The openai package is required for scene tagging"
+                ) from exc
+            self._client = AsyncOpenAI(
+                api_key=secret,
+                base_url=base_url.rstrip("/"),
+                timeout=timeout_s,
+                max_retries=max_retries,
+            )
+        self.model = model
+        self.max_tokens = max_tokens
+
+    async def tag_batch(self, scenes: list[Scene]) -> dict[str, SceneTags]:
+        results = await asyncio.gather(*(self._tag_one(scene) for scene in scenes))
+        return {scene_id: tags for scene_id, tags in results}
+
+    async def _tag_one(self, scene: Scene) -> tuple[str, SceneTags]:
+        request = (
+            f"Scene ID: {scene.id}\n"
+            f"Transcript: {scene.transcript or '(none)'}\n"
+            f"Dense visual caption: {scene.dense_caption or '(none)'}"
+        )
+        completion = await self._client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": request},
+            ],
+            temperature=0.1,
+            max_tokens=self.max_tokens,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "scene_tags",
+                    "strict": True,
+                    "schema": self._scene_tags_schema(),
+                },
+            },
+        )
+        if not completion.choices:
+            raise ValueError(f"Scene tagger returned no choices for {scene.id}")
+        content = completion.choices[0].message.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"Scene tagger returned no JSON for {scene.id}")
+        return scene.id, SceneTags.model_validate_json(content)
+
+    @staticmethod
+    def _scene_tags_schema() -> dict[str, object]:
+        schema = copy.deepcopy(SceneTags.model_json_schema())
+        schema["additionalProperties"] = False
+        schema["required"] = list(schema["properties"])
+        for property_schema in schema["properties"].values():
+            property_schema.pop("default", None)
+        return schema
 
 
 class EdgeSpeechTTS:
@@ -200,52 +294,6 @@ class EdgeSpeechTTS:
         # familiar words-per-minute-like integer for the native engines.
         delta = round((self.rate / 185 - 1) * 100)
         return f"{delta:+d}%"
-
-
-class VLMGroundingModel:
-    """Reranks retrieved candidates using visual annotations from the configured VLM."""
-
-    def __init__(self, annotator: OpenAICompatibleSceneAnnotator) -> None:
-        self.annotator = annotator
-
-    async def score(
-        self, shot: ShotRequest, candidates: list[Scene]
-    ) -> list[CandidateScore]:
-        annotations = await self.annotator.annotate_batch(candidates)
-        query = _content_tokens(f"{shot.visual_query} {shot.narration_text}")
-        results: list[CandidateScore] = []
-        for rank, scene in enumerate(candidates):
-            annotation = annotations.get(scene.id)
-            if annotation is None:
-                raise ValueError(f"VLM omitted grounding candidate {scene.id}")
-            content = _content_tokens(
-                f"{annotation.caption} {' '.join(annotation.tags)} "
-                f"{' '.join(annotation.characters)} {' '.join(annotation.actions)} "
-                f"{annotation.location or ''} {' '.join(annotation.objects)} "
-                f"{annotation.plot_event or ''} {scene.transcript}"
-            )
-            lexical = len(query & content) / max(1, len(query))
-            confidence = annotation.confidence
-            score = min(1.0, 0.2 + lexical * 0.7 + confidence * 0.1 - rank * 0.005)
-            results.append(
-                CandidateScore(
-                    scene_id=scene.id,
-                    score=max(0.0, score),
-                    rationale=(
-                        "configured VLM grounding with structured scene evidence"
-                    ),
-                )
-            )
-        return results
-
-
-def _content_tokens(text: str) -> set[str]:
-    lowered = text.lower()
-    tokens = set(re.findall(r"[a-z0-9_]+", lowered))
-    cjk = "".join(re.findall(r"[\u4e00-\u9fff]", lowered))
-    tokens.update(cjk)
-    tokens.update(cjk[index : index + 2] for index in range(max(0, len(cjk) - 1)))
-    return {token for token in tokens if token}
 
 
 class DirectoryMusicLibrary:

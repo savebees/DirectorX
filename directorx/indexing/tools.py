@@ -16,7 +16,6 @@ class SceneSearchTools:
         query: str,
         *,
         limit: int = 8,
-        mood: str | None = None,
         start_s: float | None = None,
         end_s: float | None = None,
     ) -> list[SceneSearchHit]:
@@ -24,7 +23,6 @@ class SceneSearchTools:
         return await self.store.search(
             query,
             limit=limit,
-            mood=mood,
             start_s=start_s,
             end_s=end_s,
         )

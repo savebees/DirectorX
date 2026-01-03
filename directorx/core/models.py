@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 Seconds = Annotated[float, Field(ge=0)]
 
@@ -44,29 +44,20 @@ class DialogueLine(BaseModel):
     words: list[DialogueWord] = Field(default_factory=list)
 
 
-class SceneAnnotation(BaseModel):
+class SceneTags(BaseModel):
     caption: str
     tags: list[str] = Field(default_factory=list)
     characters: list[str] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
     location: str | None = None
     objects: list[str] = Field(default_factory=list)
-    mood_scores: dict[str, float] = Field(default_factory=dict)
-    plot_event: str | None = None
-    confidence: float = Field(default=0.0, ge=0, le=1)
-
-    @field_validator("mood_scores")
-    @classmethod
-    def validate_mood_scores(cls, value: dict[str, float]) -> dict[str, float]:
-        if any(score < 0 or score > 1 for score in value.values()):
-            raise ValueError("Mood scores must be within [0, 1]")
-        return value
 
 
 class Scene(BaseModel):
     id: str
     source_range: TimeRange
     caption: str
+    dense_caption: str = ""
     transcript: str = ""
     dialogue: list[DialogueLine] = Field(default_factory=list)
     keyframes: list[Keyframe] = Field(default_factory=list)
@@ -75,17 +66,12 @@ class Scene(BaseModel):
     actions: list[str] = Field(default_factory=list)
     location: str | None = None
     objects: list[str] = Field(default_factory=list)
-    mood: str = "neutral"
-    mood_scores: dict[str, float] = Field(default_factory=dict)
-    plot_event: str | None = None
-    annotation_confidence: float = Field(default=0.0, ge=0, le=1)
 
 
 class VideoIndex(BaseModel):
     video_path: Path
     duration_s: Seconds
     scenes: list[Scene]
-    content_fingerprint: str | None = None
     index_version: int = 1
     search_db_path: Path | None = None
 

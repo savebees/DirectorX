@@ -8,14 +8,15 @@ from pathlib import Path
 from directorx.core.models import (
     DialogueLine,
     Scene,
-    SceneAnnotation,
+    SceneTags,
     TimeRange,
     VideoIndex,
 )
 from directorx.core.ports import (
     EmbeddingProvider,
+    DenseCaptioner,
     KeyframeExtractor,
-    SceneAnnotator,
+    SceneTagger,
     SceneDetector,
     Transcriber,
 )
@@ -47,9 +48,9 @@ def _probe_duration(path: Path) -> float:
 
 
 class HybridVideoIndexer:
-    """Scene detection -> dialogue -> keyframes -> VLM labels -> search index."""
+    """Scene detection -> dialogue -> keyframes -> captions -> tags -> index."""
 
-    INDEX_VERSION = 6
+    INDEX_VERSION = 7
 
     def __init__(
         self,
@@ -58,23 +59,25 @@ class HybridVideoIndexer:
         scene_detector: SceneDetector,
         transcriber: Transcriber,
         keyframe_extractor: KeyframeExtractor,
-        annotator: SceneAnnotator,
+        captioner: DenseCaptioner,
+        tagger: SceneTagger,
         embedding_provider: EmbeddingProvider,
         max_scene_duration_s: float = 15.0,
-        annotation_batch_size: int = 32,
+        batch_size: int = 32,
     ) -> None:
         self.cache = VideoIndexCache(cache_dir)
         self.scene_detector = scene_detector
         self.transcriber = transcriber
         self.keyframe_extractor = keyframe_extractor
-        self.annotator = annotator
+        self.captioner = captioner
+        self.tagger = tagger
         self.embedding_provider = embedding_provider
         if max_scene_duration_s <= 0:
             raise ValueError("max_scene_duration_s must be positive")
-        if annotation_batch_size <= 0:
-            raise ValueError("annotation_batch_size must be positive")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
         self.max_scene_duration_s = max_scene_duration_s
-        self.annotation_batch_size = annotation_batch_size
+        self.batch_size = batch_size
 
     async def build(self, video_path: Path) -> VideoIndex:
         source = video_path.resolve()
@@ -90,10 +93,7 @@ class HybridVideoIndexer:
             return decision.cached_index
 
         duration = await asyncio.to_thread(_probe_duration, source)
-        # Index schema changes invalidate semantic labels, but deterministic
-        # scene boundaries from an earlier index remain valid for the same
-        # content fingerprint. Reuse them so a resumed online annotation run
-        # does not decode a feature film a second time.
+        # Reuse deterministic scene boundaries when rebuilding an existing index.
         cached_ranges = (
             [scene.source_range for scene in decision.cached_index.scenes]
             if decision.cached_index is not None
@@ -136,24 +136,27 @@ class HybridVideoIndexer:
             for scene in scenes:
                 scene.keyframes = frames.get(scene.id, [])
 
-        annotations = await self._annotate_with_checkpoint(
-            scenes, decision.index_dir / f"annotations-v{self.INDEX_VERSION}.json"
+        dense_captions = await self._caption_with_checkpoint(
+            scenes, decision.index_dir / "dense-captions-v1.json"
         )
         for scene in scenes:
-            annotation = annotations.get(scene.id)
-            if annotation is None:
-                raise ValueError(f"Scene annotator omitted {scene.id}")
-            scene.caption = annotation.caption
-            scene.tags = annotation.tags
-            scene.characters = annotation.characters
-            scene.actions = annotation.actions
-            scene.location = annotation.location
-            scene.objects = annotation.objects
-            scene.mood_scores = annotation.mood_scores
-            scene.plot_event = annotation.plot_event
-            scene.annotation_confidence = annotation.confidence
-            if annotation.mood_scores:
-                scene.mood = max(annotation.mood_scores, key=annotation.mood_scores.get)
+            if scene.id not in dense_captions:
+                raise ValueError(f"Dense captioner omitted {scene.id}")
+            scene.dense_caption = dense_captions[scene.id]
+
+        scene_tags = await self._tag_with_checkpoint(
+            scenes, decision.index_dir / f"scene-tags-v{self.INDEX_VERSION}.json"
+        )
+        for scene in scenes:
+            tags = scene_tags.get(scene.id)
+            if tags is None:
+                raise ValueError(f"Scene tagger omitted {scene.id}")
+            scene.caption = tags.caption
+            scene.tags = tags.tags
+            scene.characters = tags.characters
+            scene.actions = tags.actions
+            scene.location = tags.location
+            scene.objects = tags.objects
 
         documents = [scene_document(scene) for scene in scenes]
         embeddings = await self.embedding_provider.embed(documents)
@@ -165,7 +168,6 @@ class HybridVideoIndexer:
             video_path=source,
             duration_s=duration,
             scenes=scenes,
-            content_fingerprint=decision.fingerprint,
             index_version=self.INDEX_VERSION,
             search_db_path=search_path,
         )
@@ -177,10 +179,10 @@ class HybridVideoIndexer:
         await asyncio.to_thread(self.cache.commit, source, index)
         return index
 
-    async def _annotate_with_checkpoint(
+    async def _caption_with_checkpoint(
         self, scenes: list[Scene], checkpoint_path: Path
-    ) -> dict[str, SceneAnnotation]:
-        cached: dict[str, SceneAnnotation] = {}
+    ) -> dict[str, str]:
+        cached: dict[str, str] = {}
         raw: dict[str, object] = {}
         if checkpoint_path.exists():
             raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
@@ -190,26 +192,68 @@ class HybridVideoIndexer:
         pending: list[Scene] = []
         for scene in scenes:
             entry = raw.get(scene.id)
-            if isinstance(entry, dict) and entry.get(
-                "signature"
-            ) == self._scene_signature(scene):
-                cached[scene.id] = SceneAnnotation.model_validate(entry["annotation"])
+            if isinstance(entry, dict) and entry.get("signature") == self._scene_signature(scene):
+                caption = entry.get("dense_caption")
+                if not isinstance(caption, str) or not caption.strip():
+                    raise ValueError(f"Invalid dense caption checkpoint entry for {scene.id}")
+                cached[scene.id] = caption
                 continue
             pending.append(scene)
 
-        for offset in range(0, len(pending), self.annotation_batch_size):
-            batch = pending[offset : offset + self.annotation_batch_size]
-            annotations = await self.annotator.annotate_batch(batch)
-            missing = [scene.id for scene in batch if scene.id not in annotations]
+        for offset in range(0, len(pending), self.batch_size):
+            batch = pending[offset : offset + self.batch_size]
+            captions = await self.captioner.caption_batch(batch)
+            missing = [scene.id for scene in batch if scene.id not in captions]
             if missing:
                 raise ValueError(
-                    f"Scene annotator omitted scene ids: {', '.join(missing[:8])}"
+                    f"Dense captioner omitted scene ids: {', '.join(missing[:8])}"
                 )
-            cached.update(annotations)
+            cached.update(captions)
             checkpoint = {
                 scene.id: {
                     "signature": self._scene_signature(scene),
-                    "annotation": cached[scene.id].model_dump(mode="json"),
+                    "dense_caption": cached[scene.id],
+                }
+                for scene in scenes
+                if scene.id in cached
+            }
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = checkpoint_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            temporary.replace(checkpoint_path)
+        return cached
+
+    async def _tag_with_checkpoint(
+        self, scenes: list[Scene], checkpoint_path: Path
+    ) -> dict[str, SceneTags]:
+        cached: dict[str, SceneTags] = {}
+        raw: dict[str, object] = {}
+        if checkpoint_path.exists():
+            raw = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError(f"Expected a JSON object in {checkpoint_path}")
+
+        pending: list[Scene] = []
+        for scene in scenes:
+            entry = raw.get(scene.id)
+            if isinstance(entry, dict) and entry.get("signature") == self._tag_signature(scene):
+                cached[scene.id] = SceneTags.model_validate(entry["tags"])
+                continue
+            pending.append(scene)
+
+        for offset in range(0, len(pending), self.batch_size):
+            batch = pending[offset : offset + self.batch_size]
+            tags = await self.tagger.tag_batch(batch)
+            missing = [scene.id for scene in batch if scene.id not in tags]
+            if missing:
+                raise ValueError(f"Scene tagger omitted scene ids: {', '.join(missing[:8])}")
+            cached.update(tags)
+            checkpoint = {
+                scene.id: {
+                    "signature": self._tag_signature(scene),
+                    "tags": cached[scene.id].model_dump(mode="json"),
                 }
                 for scene in scenes
                 if scene.id in cached
@@ -228,8 +272,13 @@ class HybridVideoIndexer:
             f"{frame.timestamp_s:.6f}:{frame.path.name}" for frame in scene.keyframes
         )
         return (
-            f"{scene.source_range.start_s:.6f}:{scene.source_range.end_s:.6f}:{frames}"
+            f"{scene.source_range.start_s:.6f}:{scene.source_range.end_s:.6f}:"
+            f"{frames}"
         )
+
+    @classmethod
+    def _tag_signature(cls, scene: Scene) -> str:
+        return f"{cls._scene_signature(scene)}:{scene.transcript}:{scene.dense_caption}"
 
     @staticmethod
     def _dialogue_for_range(

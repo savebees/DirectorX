@@ -24,37 +24,27 @@ class PySceneDetectDetector:
     def __init__(
         self,
         *,
-        detector: str = "adaptive",
         threshold: float = 27.0,
         min_scene_len_frames: int = 15,
     ) -> None:
-        self.detector = detector
         self.threshold = threshold
         self.min_scene_len_frames = min_scene_len_frames
 
     async def detect(self, video_path: Path, duration_s: float) -> list[TimeRange]:
         def run() -> list[TimeRange]:
             try:
-                from scenedetect import AdaptiveDetector, ContentDetector, detect
+                from scenedetect import AdaptiveDetector, detect
             except ImportError as exc:
                 raise RuntimeError(
                     "PySceneDetect is required for hybrid indexing; "
                     "install the scene-index extra"
                 ) from exc
 
-            if self.detector == "content":
-                algorithm = ContentDetector(
-                    threshold=self.threshold,
-                    min_scene_len=self.min_scene_len_frames,
-                )
-            elif self.detector == "adaptive":
-                algorithm = AdaptiveDetector(
-                    adaptive_threshold=3.0,
-                    min_scene_len=self.min_scene_len_frames,
-                    min_content_val=max(5.0, self.threshold / 2),
-                )
-            else:
-                raise ValueError(f"Unsupported scene detector: {self.detector}")
+            algorithm = AdaptiveDetector(
+                adaptive_threshold=3.0,
+                min_scene_len=self.min_scene_len_frames,
+                min_content_val=max(5.0, self.threshold / 2),
+            )
 
             detected = detect(str(video_path), algorithm, start_in_scene=True)
             ranges = [
@@ -67,6 +57,10 @@ class PySceneDetectDetector:
             return ranges
 
         return await asyncio.to_thread(run)
+
+
+class NoEmbeddedSubtitleError(RuntimeError):
+    """The source has no compatible embedded text subtitle track."""
 
 
 class EmbeddedSubtitleTranscriber:
@@ -105,7 +99,7 @@ class EmbeddedSubtitleTranscriber:
             stream for stream in streams if stream.get("codec_name") in self.TEXT_CODECS
         ]
         if not compatible:
-            raise ValueError(f"No compatible embedded subtitle track in {video_path}")
+            raise NoEmbeddedSubtitleError(video_path)
 
         language_rank = {
             language: rank for rank, language in enumerate(self.preferred_languages)
@@ -252,6 +246,34 @@ class SidecarSubtitleTranscriber:
             if any(alias in tokens for alias in aliases):
                 return canonical
         return None
+
+
+class AutoTranscriber:
+    """Use sidecar subtitles, embedded subtitles, then Whisper ASR."""
+
+    def __init__(
+        self,
+        sidecar: SidecarSubtitleTranscriber,
+        embedded: EmbeddedSubtitleTranscriber,
+        whisper: FasterWhisperTranscriber,
+    ) -> None:
+        self.sidecar = sidecar
+        self.embedded = embedded
+        self.whisper = whisper
+
+    async def transcribe(self, video_path: Path) -> list[DialogueLine]:
+        try:
+            return await self.sidecar.transcribe(video_path)
+        except FileNotFoundError:
+            return await self._transcribe_without_sidecar(video_path)
+
+    async def _transcribe_without_sidecar(
+        self, video_path: Path
+    ) -> list[DialogueLine]:
+        try:
+            return await self.embedded.transcribe(video_path)
+        except NoEmbeddedSubtitleError:
+            return await self.whisper.transcribe(video_path)
 
 
 class FasterWhisperTranscriber:

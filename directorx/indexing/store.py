@@ -21,15 +21,13 @@ from directorx.core.ports import EmbeddingProvider
 def scene_document(scene: Scene) -> str:
     values = [
         scene.caption,
+        scene.dense_caption,
         scene.transcript,
         " ".join(scene.tags),
         " ".join(scene.characters),
         " ".join(scene.actions),
         scene.location or "",
         " ".join(scene.objects),
-        scene.plot_event or "",
-        scene.mood,
-        " ".join(scene.mood_scores),
     ]
     return "\n".join(value for value in values if value)
 
@@ -85,7 +83,6 @@ class SceneSearchStore:
                         end_s REAL NOT NULL,
                         caption TEXT NOT NULL,
                         transcript TEXT NOT NULL,
-                        mood TEXT NOT NULL,
                         document TEXT NOT NULL,
                         scene_json TEXT NOT NULL,
                         embedding_json TEXT NOT NULL
@@ -106,14 +103,13 @@ class SceneSearchStore:
                 for scene, embedding in zip(index.scenes, embeddings, strict=True):
                     document = scene_document(scene)
                     connection.execute(
-                        "INSERT INTO scenes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO scenes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             scene.id,
                             scene.source_range.start_s,
                             scene.source_range.end_s,
                             scene.caption,
                             scene.transcript,
-                            scene.mood,
                             document,
                             scene.model_dump_json(),
                             json.dumps(embedding),
@@ -143,7 +139,6 @@ class SceneSearchStore:
         *,
         limit: int = 8,
         dialogue_only: bool = False,
-        mood: str | None = None,
         start_s: float | None = None,
         end_s: float | None = None,
     ) -> list[SceneSearchHit]:
@@ -156,9 +151,6 @@ class SceneSearchStore:
 
         clauses = []
         parameters: list[object] = []
-        if mood:
-            clauses.append("mood = ?")
-            parameters.append(mood)
         if start_s is not None:
             clauses.append("end_s > ?")
             parameters.append(start_s)
@@ -209,8 +201,6 @@ class SceneSearchStore:
                 matched_by.append("dialogue" if dialogue_only else "lexical")
             if fts > 0:
                 matched_by.append("fts")
-            if mood and row["mood"] == mood:
-                matched_by.append("mood")
             scored.append(
                 SceneSearchHit(
                     scene_id=row["scene_id"],

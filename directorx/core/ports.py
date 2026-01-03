@@ -10,7 +10,7 @@ from .models import (
     MusicTrack,
     RenderPlan,
     Scene,
-    SceneAnnotation,
+    SceneTags,
     ShotRequest,
     Storyboard,
     TimeRange,
@@ -36,10 +36,12 @@ class KeyframeExtractor(Protocol):
     ) -> dict[str, list[Keyframe]]: ...
 
 
-class SceneAnnotator(Protocol):
-    async def annotate_batch(
-        self, scenes: list[Scene]
-    ) -> dict[str, SceneAnnotation]: ...
+class DenseCaptioner(Protocol):
+    async def caption_batch(self, scenes: list[Scene]) -> dict[str, str]: ...
+
+
+class SceneTagger(Protocol):
+    async def tag_batch(self, scenes: list[Scene]) -> dict[str, SceneTags]: ...
 
 
 class EmbeddingProvider(Protocol):

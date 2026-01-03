@@ -36,7 +36,7 @@ The coordination layer keeps three explicit context scopes. `ProjectMemory` cont
 
 Tasks, results, consultations, and decisions are immutable files. A repeated identifier fails instead of overwriting prior state. Only Director-approved information enters project memory; transient discussion stays outside it.
 
-The current implementation intentionally stops at this coordination boundary. Existing indexing, model, audio, grounding, and rendering code is retained as specialist capability code, but no fixed orchestration path schedules those capabilities. Agent skills and tool bindings will be defined one role at a time.
+The first implemented specialist capability is `FootageAnalystAgent`: it understands a source video through scene boundaries, dialogue, keyframes, dense visual captions, normalized retrieval tags, and embeddings, then returns a searchable `VideoIndex`. The VLM writes plain-text dense captions; an LLM combines those captions with subtitles or ASR transcripts and writes the small searchable tag set back to each scene. It does not write creative recommendations or project decisions. The other agents remain independent capability code until their own first capability is defined.
 
 ## Setup
 
@@ -52,7 +52,7 @@ DirectorX reads API keys from the process environment and does not load `.env` a
 
 ## Configuration
 
-[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, transcription, embedding, VLM, LLM, TTS, rendering, and edit defaults. Provider names are validated; adding a provider requires an explicit adapter.
+[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, transcription, embedding, VLM, LLM, TTS, rendering, and edit defaults. Footage indexing uses PySceneDetect's AdaptiveDetector. Transcription defaults to `auto`: an available sidecar subtitle is preferred, then an embedded text subtitle track, then faster-whisper ASR. Provider names are validated; adding a provider requires an explicit adapter.
 
 The standalone index command remains available while the Footage Analyst role is developed:
 
@@ -70,7 +70,7 @@ directorx/
   agents/         Director and specialist implementations
   coordination/   roles, contracts, permissions, context storage, and runtime
   core/           video-editing domain models and provider protocols
-  indexing/       scene detection, transcription, annotation, and search
+  indexing/       scene detection, transcription, captions, tags, and search
   rendering/      deterministic FFmpeg execution
   services/       LLM, VLM, TTS, and media adapters
   cli/            standalone operational commands
@@ -92,3 +92,7 @@ python3 -m pytest -q
 ```
 
 The repository runs directly from its root. It is not a Python distribution and does not use a `dist/` build workflow.
+
+## 💗 Acknowledgement
+
+DirectorX's scene-indexing field organization was informed by the separated visual, speech, label, object, and topic metadata exposed by [Google Cloud Video Intelligence](https://cloud.google.com/video-intelligence) and [Azure AI Video Indexer](https://learn.microsoft.com/azure/azure-video-indexer/). These projects helped shape the distinction between dense visual evidence and normalized retrieval tags.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tempfile
@@ -13,100 +12,59 @@ from directorx.core.models import VideoIndex
 
 @dataclass(frozen=True)
 class CacheDecision:
-    fingerprint: str
+    video_name: str
     index_dir: Path
     cached_index: VideoIndex | None
-    content_was_hashed: bool
 
 
 class VideoIndexCache:
-    """Content-addressed index cache with a cheap path/stat fast path."""
+    """Look up indexes by source filename and keep their files together."""
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        self.sources_dir = self.root / "sources"
+        self.registry_path = self.root / "registry.json"
         self.indexes_dir = self.root / "indexes"
 
     def resolve(self, video_path: Path) -> CacheDecision:
         source = video_path.resolve()
-        stat = source.stat()
-        registry_path = self._registry_path(source)
-        registry = self._read_json(registry_path)
-
-        if registry and self._same_stat(registry, stat):
-            fingerprint = str(registry.get("content_fingerprint", ""))
-            cached = self._load_index(fingerprint, source)
-            if cached is not None:
-                return CacheDecision(
-                    fingerprint=fingerprint,
-                    index_dir=self.indexes_dir / fingerprint,
-                    cached_index=cached,
-                    content_was_hashed=False,
-                )
-
-        fingerprint = self._sha256(source)
-        cached = self._load_index(fingerprint, source)
-        decision = CacheDecision(
-            fingerprint=fingerprint,
-            index_dir=self.indexes_dir / fingerprint,
+        video_name = source.name
+        registry = self._read_json(self.registry_path) or {}
+        index_dir = self.indexes_dir / video_name
+        registered_dir = registry.get(video_name, {}).get("index_dir")
+        if registered_dir:
+            index_dir = self.root / registered_dir
+        cached = self._load_index(index_dir, source)
+        return CacheDecision(
+            video_name=video_name,
+            index_dir=index_dir,
             cached_index=cached,
-            content_was_hashed=True,
         )
-        if cached is not None:
-            self._write_registry(source, stat, fingerprint)
-        return decision
 
     def commit(self, video_path: Path, index: VideoIndex) -> Path:
-        if not index.content_fingerprint:
-            raise ValueError("Cannot cache an index without a content fingerprint")
         source = video_path.resolve()
-        index_dir = self.indexes_dir / index.content_fingerprint
+        video_name = source.name
+        index_dir = self.indexes_dir / video_name
         index_dir.mkdir(parents=True, exist_ok=True)
         index_path = index_dir / "index.json"
         self._write_json_atomic(index_path, index.model_dump(mode="json"))
-        self._write_registry(source, source.stat(), index.content_fingerprint)
+
+        registry = self._read_json(self.registry_path) or {}
+        registry[video_name] = {
+            "index_dir": str(index_dir.relative_to(self.root)),
+            "index_version": index.index_version,
+        }
+        self._write_json_atomic(self.registry_path, registry)
         return index_path
 
-    def _load_index(self, fingerprint: str, source: Path) -> VideoIndex | None:
-        if not fingerprint:
-            return None
-        index_path = self.indexes_dir / fingerprint / "index.json"
+    def _load_index(self, index_dir: Path, source: Path) -> VideoIndex | None:
+        index_path = index_dir / "index.json"
+        search_path = index_dir / "search.sqlite3"
         payload = self._read_json(index_path)
-        if payload is None:
+        if payload is None or not search_path.exists():
             return None
         payload["video_path"] = str(source)
-        payload["search_db_path"] = str(index_path.parent / "search.sqlite3")
+        payload["search_db_path"] = str(search_path)
         return VideoIndex.model_validate(payload)
-
-    def _registry_path(self, source: Path) -> Path:
-        path_id = hashlib.sha256(os.fsencode(str(source))).hexdigest()[:24]
-        return self.sources_dir / f"{path_id}.json"
-
-    def _write_registry(
-        self, source: Path, stat: os.stat_result, fingerprint: str
-    ) -> None:
-        payload = {
-            "source_path": str(source),
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
-            "content_fingerprint": fingerprint,
-        }
-        self._write_json_atomic(self._registry_path(source), payload)
-
-    @staticmethod
-    def _same_stat(payload: dict[str, Any], stat: os.stat_result) -> bool:
-        return (
-            payload.get("size") == stat.st_size
-            and payload.get("mtime_ns") == stat.st_mtime_ns
-        )
-
-    @staticmethod
-    def _sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while chunk := stream.read(chunk_size):
-                digest.update(chunk)
-        return digest.hexdigest()
 
     @staticmethod
     def _read_json(path: Path) -> dict[str, Any] | None:

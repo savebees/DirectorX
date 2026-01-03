@@ -14,15 +14,14 @@ class PathsConfig(BaseModel):
 
 
 class IndexingConfig(BaseModel):
-    detector: Literal["adaptive", "content"]
     keyframe_positions: list[float]
     frame_workers: int = Field(gt=0)
     max_scene_duration_s: float = Field(gt=0)
-    annotation_batch_size: int = Field(gt=0)
+    batch_size: int = Field(gt=0)
 
 
 class TranscriptionConfig(BaseModel):
-    provider: Literal["subtitles", "embedded", "whisper", "none"]
+    provider: Literal["auto", "subtitles", "embedded", "whisper", "none"]
     subtitle_path: Path | None
     subtitle_encoding: str
     whisper_model: str
@@ -57,6 +56,8 @@ class LLMConfig(BaseModel):
     api_key_env: str
     screenwriter_model: str
     screenwriter_max_tokens: int = Field(gt=0)
+    scene_tagger_model: str
+    scene_tagger_max_tokens: int = Field(gt=0)
     timeout_s: float = Field(gt=0)
     retries: int = Field(ge=0)
 

@@ -9,33 +9,19 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from directorx.core.models import Scene, SceneAnnotation
-
-SYSTEM_PROMPT = """You annotate movie shots for a retrieval system.
-Report only details supported by the supplied frames and dialogue. Do not infer a
-real person's identity. Use stable generic character labels such as person_1 when
-identity is unavailable. Treat mood as uncertain evidence, not fact. Return only
-the requested JSON object, with no markdown or explanation."""
+from directorx.core.models import Scene
 
 
-class _VLMSceneAnnotation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    caption: str
-    tags: list[str]
-    characters: list[str]
-    actions: list[str]
-    location: str | None
-    objects: list[str]
-    mood_scores: dict[str, float]
-    plot_event: str | None
-    confidence: float = Field(ge=0, le=1)
+SYSTEM_PROMPT = """You describe movie shots for a retrieval system.
+Use only visible evidence in the supplied frames.
+Write a dense factual caption in the requested language. Include people,
+actions, objects, location, visible text, and relationships when they are
+observable. Do not infer identities, hidden events, motives, or plot facts.
+Return plain text only: no JSON, markdown, headings, or bullet points."""
 
 
-class OpenAICompatibleSceneAnnotator:
-    """Structured multimodal annotation through an OpenAI-compatible endpoint."""
+class OpenAICompatibleDenseCaptioner:
+    """Generate plain-text visual descriptions through an OpenAI-compatible VLM."""
 
     def __init__(
         self,
@@ -97,22 +83,22 @@ class OpenAICompatibleSceneAnnotator:
             default_headers={"User-Agent": "directorx/0.1"},
         )
 
-    async def annotate_batch(self, scenes: list[Scene]) -> dict[str, SceneAnnotation]:
+    async def caption_batch(self, scenes: list[Scene]) -> dict[str, str]:
         semaphore = asyncio.Semaphore(self.max_parallel)
 
-        async def annotate(scene: Scene) -> tuple[str, SceneAnnotation]:
+        async def caption(scene: Scene) -> tuple[str, str]:
             async with semaphore:
-                return scene.id, await self._annotate_one(scene)
+                return scene.id, await self._caption_one(scene)
 
-        output: dict[str, SceneAnnotation] = {}
+        output: dict[str, str] = {}
         for offset in range(0, len(scenes), 64):
             batch = scenes[offset : offset + 64]
-            results = await asyncio.gather(*(annotate(scene) for scene in batch))
-            for result in results:
-                output[result[0]] = result[1]
+            results = await asyncio.gather(*(caption(scene) for scene in batch))
+            for scene_id, dense_caption in results:
+                output[scene_id] = dense_caption
         return output
 
-    async def _annotate_one(self, scene: Scene) -> SceneAnnotation:
+    async def _caption_one(self, scene: Scene) -> str:
         frames = self._select_frames(scene)
         if not frames:
             raise ValueError(f"Scene {scene.id} has no readable keyframes")
@@ -128,11 +114,10 @@ class OpenAICompatibleSceneAnnotator:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": content},
         ]
-        raw = await self._complete(messages)
-        annotation = self._parse_annotation(raw)
-        if not annotation.caption.strip():
-            raise ValueError(f"VLM returned an empty caption for {scene.id}")
-        return annotation
+        dense_caption = await self._complete(messages)
+        if not dense_caption.strip():
+            raise ValueError(f"VLM returned an empty dense caption for {scene.id}")
+        return dense_caption.strip()
 
     async def _complete(self, messages: list[dict[str, Any]]) -> str:
         async with self._request_lock:
@@ -144,10 +129,9 @@ class OpenAICompatibleSceneAnnotator:
         completion = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0,
+            temperature=0.2,
             max_tokens=self.max_tokens,
             stream=False,
-            response_format=self._response_format(),
             extra_body={"enable_thinking": False},
         )
         return self._message_text(completion)
@@ -159,26 +143,11 @@ class OpenAICompatibleSceneAnnotator:
         message = completion.choices[0].message
         refusal = message.refusal
         if refusal:
-            raise ValueError(f"VLM refused scene annotation: {refusal}")
+            raise ValueError(f"VLM refused dense caption: {refusal}")
         content = message.content
         if not isinstance(content, str) or not content.strip():
             raise ValueError("VLM response contained no text")
         return content
-
-    @staticmethod
-    def _parse_annotation(raw: str) -> SceneAnnotation:
-        strict_payload = _VLMSceneAnnotation.model_validate_json(raw)
-        return SceneAnnotation.model_validate(strict_payload.model_dump())
-
-    def _response_format(self) -> dict[str, Any]:
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "movie_scene_annotation",
-                "strict": True,
-                "schema": _VLMSceneAnnotation.model_json_schema(),
-            },
-        }
 
     def _select_frames(self, scene: Scene) -> list[Path]:
         frames = [frame.path for frame in scene.keyframes]
@@ -193,14 +162,12 @@ class OpenAICompatibleSceneAnnotator:
         return [frames[index] for index in sorted(indexes)]
 
     def _user_prompt(self, scene: Scene) -> str:
-        dialogue = scene.transcript.strip() or "(no dialogue available)"
         return (
-            f"Use {self.output_language} for every natural-language value.\n"
+            f"Write in {self.output_language}.\n"
             f"Time range: {scene.source_range.start_s:.3f}s to "
             f"{scene.source_range.end_s:.3f}s.\n"
-            f"Dialogue/subtitles: {dialogue}\n"
-            "Describe only visible evidence and supplied dialogue. Return every "
-            "field in the JSON schema."
+            "Describe the complete visible content of this shot in dense but "
+            "concise prose."
         )
 
     def _data_url(self, path: Path) -> str:
