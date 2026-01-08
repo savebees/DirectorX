@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -354,19 +355,29 @@ class NullTranscriber:
         return []
 
 
-class FFmpegKeyframeExtractor:
-    """Extracts representative frames at configurable relative scene positions."""
+class ShotKeyframeSelector:
+    """Select duration-aware, sharp representative frames from each shot range."""
 
     def __init__(
         self,
-        positions: tuple[float, ...] = (0.15, 0.5, 0.85),
         *,
+        candidate_fps: float = 2.0,
+        target_keyframe_interval_s: float = 3.0,
+        max_keyframes_per_shot: int = 5,
         max_width: int = 960,
         max_parallel: int = 4,
     ) -> None:
-        if not positions or any(position < 0 or position > 1 for position in positions):
-            raise ValueError("Keyframe positions must be within [0, 1]")
-        self.positions = positions
+        if candidate_fps <= 0:
+            raise ValueError("candidate_fps must be positive")
+        if target_keyframe_interval_s <= 0:
+            raise ValueError("target_keyframe_interval_s must be positive")
+        if max_keyframes_per_shot <= 0:
+            raise ValueError("max_keyframes_per_shot must be positive")
+        if max_parallel <= 0:
+            raise ValueError("max_parallel must be positive")
+        self.candidate_fps = candidate_fps
+        self.target_keyframe_interval_s = target_keyframe_interval_s
+        self.max_keyframes_per_shot = max_keyframes_per_shot
         self.max_width = max_width
         self.max_parallel = max_parallel
 
@@ -377,61 +388,122 @@ class FFmpegKeyframeExtractor:
         semaphore = asyncio.Semaphore(self.max_parallel)
         output: dict[str, list[Keyframe]] = {scene.id: [] for scene in scenes}
 
-        async def one(scene: Scene, position: float, index: int) -> None:
+        async def one(scene: Scene) -> None:
             duration = scene.source_range.duration_s
-            timestamp = scene.source_range.start_s + duration * position
-            timestamp = min(
-                scene.source_range.end_s - 1e-3,
-                max(scene.source_range.start_s, timestamp),
-            )
-            frame_path = output_dir / f"{scene.id}-{index:02d}.jpg"
-            if frame_path.exists():
-                output[scene.id].append(
-                    Keyframe(timestamp_s=timestamp, path=frame_path)
+            keyframe_count = self._keyframe_count(duration)
+            with tempfile.TemporaryDirectory(
+                prefix=f"{scene.id}-candidates-", dir=output_dir
+            ) as temporary:
+                candidate_pattern = str(Path(temporary) / "candidate-%04d.jpg")
+                async with semaphore:
+                    process = await asyncio.create_subprocess_exec(
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-ss",
+                        f"{scene.source_range.start_s:.6f}",
+                        "-i",
+                        str(video_path),
+                        "-map",
+                        "0:v:0",
+                        "-t",
+                        f"{duration:.6f}",
+                        "-vf",
+                        f"fps={self.candidate_fps},scale=min({self.max_width}\\,iw):-2",
+                        "-pix_fmt",
+                        "yuvj420p",
+                        "-q:v",
+                        "2",
+                        candidate_pattern,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _, stderr = await process.communicate()
+                if process.returncode != 0:
+                    message = stderr.decode("utf-8", errors="replace")[-1200:]
+                    raise RuntimeError(
+                        f"Candidate frame extraction failed for {scene.id}: {message}"
+                    )
+                candidates = sorted(Path(temporary).glob("candidate-*.jpg"))
+                if not candidates:
+                    raise RuntimeError(
+                        f"No candidate frames extracted for {scene.id}"
+                    )
+                selected = await asyncio.to_thread(
+                    self._select_candidates,
+                    candidates,
+                    scene.source_range.start_s,
+                    duration,
+                    keyframe_count,
                 )
-                return
-            async with semaphore:
-                process = await asyncio.create_subprocess_exec(
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-ss",
-                    f"{timestamp:.6f}",
-                    "-i",
-                    str(video_path),
-                    "-map",
-                    "0:v:0",
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    f"scale=min({self.max_width}\\,iw):-2",
-                    "-pix_fmt",
-                    "yuvj420p",
-                    "-q:v",
-                    "2",
-                    str(frame_path),
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, stderr = await process.communicate()
-            if process.returncode != 0 or not frame_path.exists():
-                message = stderr.decode("utf-8", errors="replace")[-1200:]
-                raise RuntimeError(
-                    f"Keyframe extraction failed at {timestamp:.3f}s: {message}"
-                )
-            output[scene.id].append(Keyframe(timestamp_s=timestamp, path=frame_path))
+                for index, (timestamp, source) in enumerate(selected, start=1):
+                    frame_path = output_dir / f"{scene.id}-{index:02d}.jpg"
+                    shutil.copyfile(source, frame_path)
+                    output[scene.id].append(
+                        Keyframe(timestamp_s=timestamp, path=frame_path)
+                    )
 
         await asyncio.gather(
             *(
-                one(scene, position, index)
+                one(scene)
                 for scene in scenes
-                for index, position in enumerate(self.positions, start=1)
             )
         )
         for frames in output.values():
             frames.sort(key=lambda frame: frame.timestamp_s)
         return output
+
+    def _keyframe_count(self, duration_s: float) -> int:
+        return min(
+            self.max_keyframes_per_shot,
+            max(1, math.ceil(duration_s / self.target_keyframe_interval_s)),
+        )
+
+    @staticmethod
+    def _select_candidates(
+        candidates: list[Path],
+        start_s: float,
+        duration_s: float,
+        keyframe_count: int,
+    ) -> list[tuple[float, Path]]:
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError(
+                "opencv-python is required for sharpness-aware keyframe selection"
+            ) from exc
+
+        scored: list[tuple[float, Path, float]] = []
+        for index, path in enumerate(candidates):
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                continue
+            if float(image.mean()) < 2.0 and float(image.std()) < 1.0:
+                continue
+            sharpness = float(cv2.Laplacian(image, cv2.CV_64F).var())
+            timestamp = min(
+                start_s + index / max(1, len(candidates) - 1) * duration_s,
+                start_s + duration_s - 1e-3,
+            )
+            scored.append((timestamp, path, sharpness))
+        if not scored:
+            raise ValueError("All candidate frames were unusable")
+
+        selected: list[tuple[float, Path]] = []
+        for bucket in range(keyframe_count):
+            lower = bucket / keyframe_count
+            upper = (bucket + 1) / keyframe_count
+            bucket_candidates = [
+                item
+                for item in scored
+                if lower <= (item[0] - start_s) / duration_s < upper
+            ]
+            pool = bucket_candidates or scored
+            choice = max(pool, key=lambda item: item[2])
+            if choice[1] not in {path for _, path in selected}:
+                selected.append((choice[0], choice[1]))
+        return sorted(selected, key=lambda item: item[0])
 
 
 def _tokens(text: str) -> list[str]:

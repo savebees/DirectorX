@@ -26,7 +26,7 @@ class OpenAICompatibleDenseCaptioner:
     def __init__(
         self,
         *,
-        model: str = "Qwen/Qwen3.6-35B-A3B",
+        model: str = "Qwen/Qwen3-VL-8B-Instruct",
         base_url: str = "https://api.siliconflow.cn/v1",
         api_key_env: str = "SILICONFLOW_API_KEY",
         api_key: str | None = None,
@@ -34,7 +34,7 @@ class OpenAICompatibleDenseCaptioner:
         max_parallel: int = 2,
         timeout_s: float = 120.0,
         max_retries: int = 0,
-        max_frames_per_scene: int = 3,
+        max_vlm_frames_per_scene: int = 8,
         max_tokens: int = 1200,
         max_image_dimension: int = 1024,
         jpeg_quality: int = 85,
@@ -43,8 +43,8 @@ class OpenAICompatibleDenseCaptioner:
     ) -> None:
         if max_parallel <= 0:
             raise ValueError("max_parallel must be positive")
-        if max_frames_per_scene <= 0:
-            raise ValueError("max_frames_per_scene must be positive")
+        if max_vlm_frames_per_scene <= 0:
+            raise ValueError("max_vlm_frames_per_scene must be positive")
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
         if request_interval_s < 0:
@@ -54,7 +54,7 @@ class OpenAICompatibleDenseCaptioner:
         self.api_key_env = api_key_env
         self.output_language = output_language
         self.max_parallel = max_parallel
-        self.max_frames_per_scene = max_frames_per_scene
+        self.max_vlm_frames_per_scene = max_vlm_frames_per_scene
         self.max_tokens = max_tokens
         self.max_image_dimension = max_image_dimension
         self.jpeg_quality = jpeg_quality
@@ -151,13 +151,17 @@ class OpenAICompatibleDenseCaptioner:
 
     def _select_frames(self, scene: Scene) -> list[Path]:
         frames = [frame.path for frame in scene.keyframes]
-        if len(frames) <= self.max_frames_per_scene:
+        if len(frames) <= self.max_vlm_frames_per_scene:
             return frames
-        if self.max_frames_per_scene == 1:
+        if self.max_vlm_frames_per_scene == 1:
             return [frames[len(frames) // 2]]
         indexes = {
-            round(index * (len(frames) - 1) / (self.max_frames_per_scene - 1))
-            for index in range(self.max_frames_per_scene)
+            round(
+                index
+                * (len(frames) - 1)
+                / (self.max_vlm_frames_per_scene - 1)
+            )
+            for index in range(self.max_vlm_frames_per_scene)
         }
         return [frames[index] for index in sorted(indexes)]
 

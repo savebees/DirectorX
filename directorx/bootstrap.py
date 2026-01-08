@@ -8,13 +8,13 @@ from directorx.indexing import (
     AutoTranscriber,
     EmbeddedSubtitleTranscriber,
     FasterWhisperTranscriber,
-    FFmpegKeyframeExtractor,
     HashingEmbeddingProvider,
     HybridVideoIndexer,
     NullTranscriber,
     OpenAICompatibleDenseCaptioner,
     PySceneDetectDetector,
     SentenceTransformerEmbeddingProvider,
+    ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
 )
 from directorx.services.providers import OpenAICompatibleSceneTagger
@@ -37,7 +37,7 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         max_parallel=config.vlm.workers,
         timeout_s=config.vlm.timeout_s,
         max_retries=config.vlm.retries,
-        max_frames_per_scene=config.vlm.max_frames_per_scene,
+        max_vlm_frames_per_scene=config.vlm.max_vlm_frames_per_scene,
         max_tokens=config.vlm.max_tokens,
         max_image_dimension=config.vlm.max_image_dimension,
         request_interval_s=config.vlm.request_interval_s,
@@ -54,8 +54,10 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         cache_dir=config.resolve(config.paths.cache_dir),
         scene_detector=PySceneDetectDetector(),
         transcriber=_create_transcriber(config),
-        keyframe_extractor=FFmpegKeyframeExtractor(
-            positions=tuple(config.indexing.keyframe_positions),
+        keyframe_extractor=ShotKeyframeSelector(
+            candidate_fps=config.indexing.candidate_fps,
+            target_keyframe_interval_s=config.indexing.target_keyframe_interval_s,
+            max_keyframes_per_shot=config.indexing.max_keyframes_per_shot,
             max_parallel=config.indexing.frame_workers,
         ),
         captioner=captioner,

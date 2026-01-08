@@ -14,6 +14,7 @@ from directorx.core.models import (
 )
 from directorx.indexing import (
     AutoTranscriber,
+    ShotKeyframeSelector,
     HashingEmbeddingProvider,
     HybridVideoIndexer,
     SceneSearchStore,
@@ -145,6 +146,41 @@ def test_normalize_ranges_fills_gaps_and_splits_long_shots() -> None:
         (32.0, 42.0),
         (42.0, 45.0),
     ]
+
+
+def test_keyframe_count_scales_with_shot_duration() -> None:
+    extractor = ShotKeyframeSelector(
+        candidate_fps=2.0,
+        target_keyframe_interval_s=3.0,
+        max_keyframes_per_shot=5,
+    )
+    assert extractor._keyframe_count(1.0) == 1
+    assert extractor._keyframe_count(6.0) == 2
+    assert extractor._keyframe_count(10.0) == 4
+    assert extractor._keyframe_count(20.0) == 5
+
+
+def test_keyframe_extractor_selects_sharp_frames_across_duration(tmp_path: Path) -> None:
+    video = tmp_path / "keyframes.mp4"
+    _make_video(video, duration=10)
+    scene = Scene(
+        id="scene-00001",
+        source_range=TimeRange(start_s=0, end_s=10),
+        caption="",
+    )
+    extractor = ShotKeyframeSelector(
+        candidate_fps=2.0,
+        target_keyframe_interval_s=3.0,
+        max_keyframes_per_shot=5,
+    )
+    frames = asyncio.run(
+        extractor.extract(video, [scene], tmp_path / "keyframes")
+    )[scene.id]
+    assert len(frames) == 4
+    assert all(frame.path.exists() for frame in frames)
+    assert [frame.timestamp_s for frame in frames] == sorted(
+        frame.timestamp_s for frame in frames
+    )
 
 
 def test_sidecar_subtitles_discover_preferred_language_and_parse(

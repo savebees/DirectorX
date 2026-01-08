@@ -48,11 +48,11 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-DirectorX reads API keys from the process environment and does not load `.env` automatically. Install `requirements-asr.txt` when using Whisper transcription.
+DirectorX reads API keys from the process environment and does not load `.env` automatically. Set `SILICONFLOW_API_KEY` for the Qwen3-VL captioner and `VYCE_API_KEY` for the GPT-5.6 Luna scene tagger before indexing. Install `requirements-asr.txt` when using Whisper transcription.
 
 ## Configuration
 
-[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, transcription, embedding, VLM, LLM, TTS, rendering, and edit defaults. Footage indexing uses PySceneDetect's AdaptiveDetector. Transcription defaults to `auto`: an available sidecar subtitle is preferred, then an embedded text subtitle track, then faster-whisper ASR. Provider names are validated; adding a provider requires an explicit adapter.
+[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, transcription, embedding, VLM, LLM, TTS, rendering, and edit defaults. Footage indexing uses PySceneDetect's AdaptiveDetector and duration-aware sharpness-based keyframes: candidates are sampled locally, divided across the shot timeline, and ranked by frame clarity before the scene sends at most eight images to the VLM. Transcription defaults to `auto`: an available sidecar subtitle is preferred, then an embedded text subtitle track, then faster-whisper ASR. Provider names are validated; adding a provider requires an explicit adapter.
 
 The standalone index command remains available while the Footage Analyst role is developed:
 

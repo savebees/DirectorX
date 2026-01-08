@@ -43,7 +43,7 @@ class OpenAICompatibleScreenwriterModel:
     def __init__(
         self,
         *,
-        model: str = "gpt-5.6",
+        model: str = "gpt-5.6-luna",
         base_url: str = "https://vyceai.com/v1",
         api_key_env: str = "VYCE_API_KEY",
         max_tokens: int = 4000,
@@ -154,7 +154,7 @@ Avoid duplicates, vague adjectives, and speculative labels. Return only the JSON
     def __init__(
         self,
         *,
-        model: str = "gpt-5.6",
+        model: str = "gpt-5.6-luna",
         base_url: str = "https://vyceai.com/v1",
         api_key_env: str = "VYCE_API_KEY",
         max_tokens: int = 1200,

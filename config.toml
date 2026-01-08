@@ -4,10 +4,12 @@ music_dir = "media/music"
 artifacts_dir = "artifacts"
 
 [indexing]
-keyframe_positions = [0.2, 0.5, 0.8]
 frame_workers = 4
 max_scene_duration_s = 15.0
 batch_size = 32
+candidate_fps = 2.0
+target_keyframe_interval_s = 3.0
+max_keyframes_per_shot = 5
 
 [transcription]
 provider = "auto"
@@ -25,14 +27,14 @@ hashing_dimension = 256
 
 [vlm]
 provider = "openai-compatible"
-model = "Qwen/Qwen3.6-35B-A3B"
+model = "Qwen/Qwen3-VL-8B-Instruct"
 base_url = "https://api.siliconflow.cn/v1"
 api_key_env = "SILICONFLOW_API_KEY"
 workers = 2
 timeout_s = 180.0
 retries = 3
 max_tokens = 1200
-max_frames_per_scene = 3
+max_vlm_frames_per_scene = 8
 max_image_dimension = 1024
 request_interval_s = 2.0
 
@@ -40,9 +42,9 @@ request_interval_s = 2.0
 provider = "openai-compatible"
 base_url = "https://vyceai.com/v1"
 api_key_env = "VYCE_API_KEY"
-screenwriter_model = "gpt-5.6"
+screenwriter_model = "gpt-5.6-luna"
 screenwriter_max_tokens = 4000
-scene_tagger_model = "gpt-5.6"
+scene_tagger_model = "gpt-5.6-luna"
 scene_tagger_max_tokens = 1200
 timeout_s = 180.0
 retries = 3

@@ -50,7 +50,7 @@ def _probe_duration(path: Path) -> float:
 class HybridVideoIndexer:
     """Scene detection -> dialogue -> keyframes -> captions -> tags -> index."""
 
-    INDEX_VERSION = 7
+    INDEX_VERSION = 8
 
     def __init__(
         self,
@@ -117,12 +117,7 @@ class HybridVideoIndexer:
                 source_range=time_range,
                 caption="",
                 dialogue=self._dialogue_for_range(dialogue, time_range),
-                keyframes=(
-                    decision.cached_index.scenes[index].keyframes
-                    if decision.cached_index is not None
-                    and index < len(decision.cached_index.scenes)
-                    else []
-                ),
+                keyframes=[],
             )
             for index, time_range in enumerate(ranges)
         ]

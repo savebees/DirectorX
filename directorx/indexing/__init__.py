@@ -4,12 +4,12 @@ from .backends import (
     AutoTranscriber,
     EmbeddedSubtitleTranscriber,
     FasterWhisperTranscriber,
-    FFmpegKeyframeExtractor,
     HashingEmbeddingProvider,
     NullTranscriber,
     NoEmbeddedSubtitleError,
     PySceneDetectDetector,
     SentenceTransformerEmbeddingProvider,
+    ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
 )
 from .indexer import HybridVideoIndexer
@@ -20,7 +20,7 @@ from .vlm import OpenAICompatibleDenseCaptioner
 __all__ = [
     "EmbeddedSubtitleTranscriber",
     "AutoTranscriber",
-    "FFmpegKeyframeExtractor",
+    "ShotKeyframeSelector",
     "FasterWhisperTranscriber",
     "HashingEmbeddingProvider",
     "HybridVideoIndexer",

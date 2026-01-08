@@ -14,10 +14,12 @@ class PathsConfig(BaseModel):
 
 
 class IndexingConfig(BaseModel):
-    keyframe_positions: list[float]
     frame_workers: int = Field(gt=0)
     max_scene_duration_s: float = Field(gt=0)
     batch_size: int = Field(gt=0)
+    candidate_fps: float = Field(gt=0)
+    target_keyframe_interval_s: float = Field(gt=0)
+    max_keyframes_per_shot: int = Field(gt=0)
 
 
 class TranscriptionConfig(BaseModel):
@@ -45,7 +47,7 @@ class VLMConfig(BaseModel):
     timeout_s: float = Field(gt=0)
     retries: int = Field(ge=0)
     max_tokens: int = Field(gt=0)
-    max_frames_per_scene: int = Field(gt=0)
+    max_vlm_frames_per_scene: int = Field(gt=0)
     max_image_dimension: int = Field(gt=0)
     request_interval_s: float = Field(ge=0)
 

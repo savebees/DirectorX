@@ -50,7 +50,7 @@ def test_vlm_returns_plain_text_and_sends_images(tmp_path: Path) -> None:
 
     assert captions["scene-00001"].startswith("一名人物")
     call = client.completions.calls[0]
-    assert call["model"] == "Qwen/Qwen3.6-35B-A3B"
+    assert call["model"] == "Qwen/Qwen3-VL-8B-Instruct"
     assert "response_format" not in call
     assert "不要打开那扇门" not in call["messages"][1]["content"][0]["text"]
     image_part = call["messages"][1]["content"][1]
