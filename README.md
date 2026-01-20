@@ -36,7 +36,7 @@ The coordination layer keeps three explicit context scopes. `ProjectMemory` cont
 
 Tasks, results, consultations, and decisions are immutable files. A repeated identifier fails instead of overwriting prior state. Only Director-approved information enters project memory; transient discussion stays outside it.
 
-The first implemented specialist capability is `FootageAnalystAgent`: it understands a source video through scene boundaries, dialogue, keyframes, dense visual captions, normalized retrieval tags, and embeddings, then returns a searchable `VideoIndex`. The VLM writes plain-text dense captions; an LLM combines those captions with subtitles or ASR transcripts and writes the small searchable tag set back to each scene. It does not write creative recommendations or project decisions. The other agents remain independent capability code until their own first capability is defined.
+The first implemented specialist capability is `FootageAnalystAgent`: it detects shots, groups adjacent visually similar shots into scenes, selects keyframes, writes dense visual captions, adds normalized retrieval tags, and builds embeddings before returning a searchable `VideoIndex`. Scene grouping uses local CLIP image embeddings and a configurable similarity threshold; subtitles and ASR are used for scene metadata, not for the visual grouping decision. The VLM writes plain-text dense captions; an LLM combines those captions with subtitles or ASR transcripts and writes the small searchable tag set back to each scene. It does not write creative recommendations or project decisions. The other agents remain independent capability code until their own first capability is defined.
 
 ## Setup
 
@@ -52,7 +52,7 @@ DirectorX reads API keys from the process environment and does not load `.env` a
 
 ## Configuration
 
-[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, transcription, embedding, VLM, LLM, TTS, rendering, and edit defaults. Footage indexing uses PySceneDetect's AdaptiveDetector and duration-aware sharpness-based keyframes: candidates are sampled locally, divided across the shot timeline, and ranked by frame clarity before the scene sends at most eight images to the VLM. Transcription defaults to `auto`: an available sidecar subtitle is preferred, then an embedded text subtitle track, then faster-whisper ASR. Provider names are validated; adding a provider requires an explicit adapter.
+[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, scene grouping, transcription, embedding, VLM, LLM, TTS, rendering, and edit defaults. Footage indexing uses PySceneDetect's AdaptiveDetector for shots, local CLIP image embeddings to merge adjacent shots into scenes, and duration-aware sharpness-based keyframes: candidates are sampled locally, divided across each shot timeline, and ranked by frame clarity before each scene sends at most eight images to the VLM. Transcription defaults to `auto`: an available sidecar subtitle is preferred, then an embedded text subtitle track, then faster-whisper ASR. Provider names are validated; adding a provider requires an explicit adapter.
 
 The standalone index command remains available while the Footage Analyst role is developed:
 
@@ -70,7 +70,7 @@ directorx/
   agents/         Director and specialist implementations
   coordination/   roles, contracts, permissions, context storage, and runtime
   core/           video-editing domain models and provider protocols
-  indexing/       scene detection, transcription, captions, tags, and search
+  indexing/       shot detection, visual scene grouping, transcription, captions, tags, and search
   rendering/      deterministic FFmpeg execution
   services/       LLM, VLM, TTS, and media adapters
   cli/            standalone operational commands

@@ -44,6 +44,13 @@ class DialogueLine(BaseModel):
     words: list[DialogueWord] = Field(default_factory=list)
 
 
+class Shot(BaseModel):
+    id: str
+    source_range: TimeRange
+    dialogue: list[DialogueLine] = Field(default_factory=list)
+    keyframes: list[Keyframe] = Field(default_factory=list)
+
+
 class SceneTags(BaseModel):
     caption: str
     tags: list[str] = Field(default_factory=list)
@@ -57,6 +64,7 @@ class Scene(BaseModel):
     id: str
     source_range: TimeRange
     caption: str
+    shots: list[Shot] = Field(default_factory=list)
     dense_caption: str = ""
     transcript: str = ""
     dialogue: list[DialogueLine] = Field(default_factory=list)

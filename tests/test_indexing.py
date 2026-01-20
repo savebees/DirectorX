@@ -10,16 +10,18 @@ from directorx.core.models import (
     Keyframe,
     Scene,
     SceneTags,
+    Shot,
     TimeRange,
 )
 from directorx.indexing import (
     AutoTranscriber,
-    ShotKeyframeSelector,
     HashingEmbeddingProvider,
     HybridVideoIndexer,
     SceneSearchStore,
     SceneSearchTools,
+    ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
+    VisualSceneGrouper,
 )
 from directorx.indexing.backends import NoEmbeddedSubtitleError
 
@@ -47,12 +49,15 @@ class FixedDetector:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def detect(self, video_path: Path, duration_s: float) -> list[TimeRange]:
+    async def detect(self, video_path: Path, duration_s: float) -> list[Shot]:
         self.calls += 1
         return [
-            TimeRange(start_s=0, end_s=4),
-            TimeRange(start_s=4, end_s=8),
-            TimeRange(start_s=8, end_s=duration_s),
+            Shot(id="shot-00000", source_range=TimeRange(start_s=0, end_s=4)),
+            Shot(id="shot-00001", source_range=TimeRange(start_s=4, end_s=8)),
+            Shot(
+                id="shot-00002",
+                source_range=TimeRange(start_s=8, end_s=duration_s),
+            ),
         ]
 
 
@@ -88,18 +93,23 @@ class FakeKeyframes:
         self.calls = 0
 
     async def extract(
-        self, video_path: Path, scenes: list[Scene], output_dir: Path
+        self, video_path: Path, shots: list[Shot], output_dir: Path
     ) -> dict[str, list[Keyframe]]:
         self.calls += 1
         output_dir.mkdir(parents=True, exist_ok=True)
         result = {}
-        for scene in scenes:
-            path = output_dir / f"{scene.id}.jpg"
+        for shot in shots:
+            path = output_dir / f"{shot.id}.jpg"
             path.write_bytes(b"test-frame")
-            result[scene.id] = [
-                Keyframe(timestamp_s=scene.source_range.start_s + 0.5, path=path)
+            result[shot.id] = [
+                Keyframe(timestamp_s=shot.source_range.start_s + 0.5, path=path)
             ]
         return result
+
+
+class FixedVisualEmbedder:
+    async def embed(self, shots: list[Shot]) -> list[list[float]]:
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]][: len(shots)]
 
 
 class FixedCaptioner:
@@ -135,17 +145,49 @@ class FixedTagger:
         }
 
 
-def test_normalize_ranges_fills_gaps_and_splits_long_shots() -> None:
-    ranges = HybridVideoIndexer._normalize_ranges(
-        [TimeRange(start_s=2, end_s=42)], 45, max_scene_duration_s=15
+def test_normalize_shots_fills_gaps_without_splitting_a_shot() -> None:
+    shots = HybridVideoIndexer._normalize_shots(
+        [Shot(id="source", source_range=TimeRange(start_s=2, end_s=42))], 45
     )
-    assert [(item.start_s, item.end_s) for item in ranges] == [
+    assert [(item.source_range.start_s, item.source_range.end_s) for item in shots] == [
         (0.0, 2.0),
-        (2.0, 17.0),
-        (17.0, 32.0),
-        (32.0, 42.0),
+        (2.0, 42.0),
         (42.0, 45.0),
     ]
+
+
+def test_visual_scene_grouper_merges_adjacent_similar_shots() -> None:
+    shots = [
+        Shot(id="shot-1", source_range=TimeRange(start_s=0, end_s=3)),
+        Shot(id="shot-2", source_range=TimeRange(start_s=3, end_s=6)),
+        Shot(id="shot-3", source_range=TimeRange(start_s=6, end_s=9)),
+    ]
+    grouper = VisualSceneGrouper(
+        FixedVisualEmbedder(), similarity_threshold=0.9, max_scene_duration_s=10
+    )
+    scenes = asyncio.run(grouper.group(shots))
+
+    assert len(scenes) == 3
+
+    class SimilarVisualEmbedder:
+        async def embed(self, shots: list[Shot]) -> list[list[float]]:
+            return [[1.0, 0.0], [0.99, 0.1], [0.0, 1.0]][: len(shots)]
+
+    merged = asyncio.run(
+        VisualSceneGrouper(
+            SimilarVisualEmbedder(), similarity_threshold=0.9, max_scene_duration_s=10
+        ).group(shots)
+    )
+    assert len(merged) == 2
+    assert [shot.id for shot in merged[0].shots] == ["shot-1", "shot-2"]
+    assert merged[0].source_range == TimeRange(start_s=0, end_s=6)
+
+    limited = asyncio.run(
+        VisualSceneGrouper(
+            SimilarVisualEmbedder(), similarity_threshold=0.9, max_scene_duration_s=5
+        ).group(shots)
+    )
+    assert [len(scene.shots) for scene in limited] == [1, 1, 1]
 
 
 def test_keyframe_count_scales_with_shot_duration() -> None:
@@ -160,22 +202,23 @@ def test_keyframe_count_scales_with_shot_duration() -> None:
     assert extractor._keyframe_count(20.0) == 5
 
 
-def test_keyframe_extractor_selects_sharp_frames_across_duration(tmp_path: Path) -> None:
+def test_keyframe_extractor_selects_sharp_frames_across_duration(
+    tmp_path: Path,
+) -> None:
     video = tmp_path / "keyframes.mp4"
     _make_video(video, duration=10)
-    scene = Scene(
-        id="scene-00001",
+    shot = Shot(
+        id="shot-00001",
         source_range=TimeRange(start_s=0, end_s=10),
-        caption="",
     )
     extractor = ShotKeyframeSelector(
         candidate_fps=2.0,
         target_keyframe_interval_s=3.0,
         max_keyframes_per_shot=5,
     )
-    frames = asyncio.run(
-        extractor.extract(video, [scene], tmp_path / "keyframes")
-    )[scene.id]
+    frames = asyncio.run(extractor.extract(video, [shot], tmp_path / "keyframes"))[
+        shot.id
+    ]
     assert len(frames) == 4
     assert all(frame.path.exists() for frame in frames)
     assert [frame.timestamp_s for frame in frames] == sorted(
@@ -250,7 +293,10 @@ def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     embeddings = HashingEmbeddingProvider(dimension=128)
     indexer = HybridVideoIndexer(
         cache_dir=tmp_path / "index-cache",
-        scene_detector=detector,
+        shot_detector=detector,
+        scene_grouper=VisualSceneGrouper(
+            FixedVisualEmbedder(), similarity_threshold=0.9, max_scene_duration_s=4
+        ),
         transcriber=transcriber,
         keyframe_extractor=keyframes,
         captioner=captioner,
@@ -265,9 +311,14 @@ def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     assert first.scenes[1].objects == ["秘密箱子"]
     assert first.search_db_path and first.search_db_path.exists()
 
-    second = asyncio.run(indexer.build(video))
+    asyncio.run(indexer.build(video))
     assert (
-        detector.calls == transcriber.calls == keyframes.calls == captioner.calls == tagger.calls == 1
+        detector.calls
+        == transcriber.calls
+        == keyframes.calls
+        == captioner.calls
+        == tagger.calls
+        == 1
     )
 
     moved_video = tmp_path / "moved" / video.name
@@ -276,7 +327,12 @@ def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     third = asyncio.run(indexer.build(moved_video))
     assert third.video_path == moved_video.resolve()
     assert (
-        detector.calls == transcriber.calls == keyframes.calls == captioner.calls == tagger.calls == 1
+        detector.calls
+        == transcriber.calls
+        == keyframes.calls
+        == captioner.calls
+        == tagger.calls
+        == 1
     )
     registry = json.loads((tmp_path / "index-cache" / "registry.json").read_text())
     assert registry[video.name]["index_dir"] == f"indexes/{video.name}"

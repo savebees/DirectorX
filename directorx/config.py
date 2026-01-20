@@ -15,11 +15,16 @@ class PathsConfig(BaseModel):
 
 class IndexingConfig(BaseModel):
     frame_workers: int = Field(gt=0)
-    max_scene_duration_s: float = Field(gt=0)
     batch_size: int = Field(gt=0)
     candidate_fps: float = Field(gt=0)
     target_keyframe_interval_s: float = Field(gt=0)
     max_keyframes_per_shot: int = Field(gt=0)
+
+
+class SceneGroupingConfig(BaseModel):
+    model: str
+    similarity_threshold: float = Field(ge=0, le=1)
+    max_scene_duration_s: float = Field(gt=0)
 
 
 class TranscriptionConfig(BaseModel):
@@ -92,6 +97,7 @@ class EditConfig(BaseModel):
 class AppConfig(BaseModel):
     paths: PathsConfig
     indexing: IndexingConfig
+    scene_grouping: SceneGroupingConfig
     transcription: TranscriptionConfig
     embedding: EmbeddingConfig
     vlm: VLMConfig

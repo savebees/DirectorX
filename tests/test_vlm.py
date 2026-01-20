@@ -81,9 +81,7 @@ class TaggerCompletions:
 
 def test_scene_tagger_uses_json_schema_after_dense_caption(tmp_path: Path) -> None:
     completions = TaggerCompletions()
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=completions)
-    )
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     scene = _scene(tmp_path)
     scene.dense_caption = "人物站在仓库里。"
     tagger = OpenAICompatibleSceneTagger(client=client)
@@ -91,4 +89,6 @@ def test_scene_tagger_uses_json_schema_after_dense_caption(tmp_path: Path) -> No
 
     assert tags[scene.id].location == "仓库"
     assert completions.calls[0]["response_format"]["type"] == "json_schema"
-    assert "dense visual caption" in completions.calls[0]["messages"][1]["content"].lower()
+    assert (
+        "dense visual caption" in completions.calls[0]["messages"][1]["content"].lower()
+    )

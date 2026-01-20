@@ -117,7 +117,10 @@ class OpenAICompatibleScreenwriterModel:
 
     @staticmethod
     def _select_context_scenes(scenes: list[Scene], limit: int) -> list[Scene]:
-        """Keep planner context bounded while preserving visual and dialogue evidence."""
+        """Keep planner context bounded while preserving visual and dialogue.
+
+        The selected scenes remain representative of the whole source video.
+        """
         if len(scenes) <= limit:
             return scenes
         # Divide the film into temporal buckets instead of taking a prefix. This
@@ -149,7 +152,8 @@ events, identities, motives, or plot facts. Return concise normalized metadata:
 - actions: visible actions
 - location: one concise location or null
 - objects: visible searchable objects
-Avoid duplicates, vague adjectives, and speculative labels. Return only the JSON object."""
+Avoid duplicates, vague adjectives, and speculative labels.
+Return only the JSON object."""
 
     def __init__(
         self,

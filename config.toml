@@ -5,11 +5,15 @@ artifacts_dir = "artifacts"
 
 [indexing]
 frame_workers = 4
-max_scene_duration_s = 15.0
 batch_size = 32
 candidate_fps = 2.0
 target_keyframe_interval_s = 3.0
 max_keyframes_per_shot = 5
+
+[scene_grouping]
+model = "clip-ViT-B-32"
+similarity_threshold = 0.80
+max_scene_duration_s = 15.0
 
 [transcription]
 provider = "auto"

@@ -11,7 +11,6 @@ from typing import Any
 
 from directorx.core.models import Scene
 
-
 SYSTEM_PROMPT = """You describe movie shots for a retrieval system.
 Use only visible evidence in the supplied frames.
 Write a dense factual caption in the requested language. Include people,
@@ -156,11 +155,7 @@ class OpenAICompatibleDenseCaptioner:
         if self.max_vlm_frames_per_scene == 1:
             return [frames[len(frames) // 2]]
         indexes = {
-            round(
-                index
-                * (len(frames) - 1)
-                / (self.max_vlm_frames_per_scene - 1)
-            )
+            round(index * (len(frames) - 1) / (self.max_vlm_frames_per_scene - 1))
             for index in range(self.max_vlm_frames_per_scene)
         }
         return [frames[index] for index in sorted(indexes)]

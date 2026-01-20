@@ -6,6 +6,7 @@ from directorx.config import AppConfig
 from directorx.core.ports import EmbeddingProvider, Transcriber
 from directorx.indexing import (
     AutoTranscriber,
+    ClipShotVisualEmbeddingProvider,
     EmbeddedSubtitleTranscriber,
     FasterWhisperTranscriber,
     HashingEmbeddingProvider,
@@ -16,6 +17,7 @@ from directorx.indexing import (
     SentenceTransformerEmbeddingProvider,
     ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
+    VisualSceneGrouper,
 )
 from directorx.services.providers import OpenAICompatibleSceneTagger
 
@@ -52,7 +54,12 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
     )
     indexer = HybridVideoIndexer(
         cache_dir=config.resolve(config.paths.cache_dir),
-        scene_detector=PySceneDetectDetector(),
+        shot_detector=PySceneDetectDetector(),
+        scene_grouper=VisualSceneGrouper(
+            ClipShotVisualEmbeddingProvider(config.scene_grouping.model),
+            similarity_threshold=config.scene_grouping.similarity_threshold,
+            max_scene_duration_s=config.scene_grouping.max_scene_duration_s,
+        ),
         transcriber=_create_transcriber(config),
         keyframe_extractor=ShotKeyframeSelector(
             candidate_fps=config.indexing.candidate_fps,
@@ -63,7 +70,6 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         captioner=captioner,
         tagger=tagger,
         embedding_provider=embedding,
-        max_scene_duration_s=config.indexing.max_scene_duration_s,
         batch_size=config.indexing.batch_size,
     )
     return IndexingRuntime(

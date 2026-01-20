@@ -9,6 +9,9 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert config.vlm.provider == "openai-compatible"
     assert config.vlm.model == "Qwen/Qwen3-VL-8B-Instruct"
     assert config.vlm.max_vlm_frames_per_scene == 8
+    assert config.scene_grouping.model == "clip-ViT-B-32"
+    assert config.scene_grouping.similarity_threshold == 0.8
+    assert config.scene_grouping.max_scene_duration_s == 15.0
     assert config.llm.screenwriter_model == "gpt-5.6-luna"
     assert config.transcription.provider == "auto"
     assert config.resolve(config.paths.artifacts_dir).name == "artifacts"

@@ -14,13 +14,13 @@ from directorx.core.models import (
     DialogueLine,
     DialogueWord,
     Keyframe,
-    Scene,
+    Shot,
     TimeRange,
 )
 
 
 class PySceneDetectDetector:
-    """Content-aware shot detection backed by the maintained PySceneDetect API."""
+    """Detect continuous shots with PySceneDetect's adaptive cut detector."""
 
     def __init__(
         self,
@@ -31,8 +31,8 @@ class PySceneDetectDetector:
         self.threshold = threshold
         self.min_scene_len_frames = min_scene_len_frames
 
-    async def detect(self, video_path: Path, duration_s: float) -> list[TimeRange]:
-        def run() -> list[TimeRange]:
+    async def detect(self, video_path: Path, duration_s: float) -> list[Shot]:
+        def run() -> list[Shot]:
             try:
                 from scenedetect import AdaptiveDetector, detect
             except ImportError as exc:
@@ -48,14 +48,19 @@ class PySceneDetectDetector:
             )
 
             detected = detect(str(video_path), algorithm, start_in_scene=True)
-            ranges = [
-                TimeRange(start_s=start.get_seconds(), end_s=end.get_seconds())
-                for start, end in detected
+            shots = [
+                Shot(
+                    id=f"shot-{index:05d}",
+                    source_range=TimeRange(
+                        start_s=start.get_seconds(), end_s=end.get_seconds()
+                    ),
+                )
+                for index, (start, end) in enumerate(detected)
                 if end.get_seconds() > start.get_seconds()
             ]
-            if not ranges:
-                raise ValueError(f"Scene detector returned no ranges for {video_path}")
-            return ranges
+            if not shots:
+                raise ValueError(f"Shot detector returned no ranges for {video_path}")
+            return shots
 
         return await asyncio.to_thread(run)
 
@@ -268,9 +273,7 @@ class AutoTranscriber:
         except FileNotFoundError:
             return await self._transcribe_without_sidecar(video_path)
 
-    async def _transcribe_without_sidecar(
-        self, video_path: Path
-    ) -> list[DialogueLine]:
+    async def _transcribe_without_sidecar(self, video_path: Path) -> list[DialogueLine]:
         try:
             return await self.embedded.transcribe(video_path)
         except NoEmbeddedSubtitleError:
@@ -382,17 +385,17 @@ class ShotKeyframeSelector:
         self.max_parallel = max_parallel
 
     async def extract(
-        self, video_path: Path, scenes: list[Scene], output_dir: Path
+        self, video_path: Path, shots: list[Shot], output_dir: Path
     ) -> dict[str, list[Keyframe]]:
         output_dir.mkdir(parents=True, exist_ok=True)
         semaphore = asyncio.Semaphore(self.max_parallel)
-        output: dict[str, list[Keyframe]] = {scene.id: [] for scene in scenes}
+        output: dict[str, list[Keyframe]] = {shot.id: [] for shot in shots}
 
-        async def one(scene: Scene) -> None:
-            duration = scene.source_range.duration_s
+        async def one(shot: Shot) -> None:
+            duration = shot.source_range.duration_s
             keyframe_count = self._keyframe_count(duration)
             with tempfile.TemporaryDirectory(
-                prefix=f"{scene.id}-candidates-", dir=output_dir
+                prefix=f"{shot.id}-candidates-", dir=output_dir
             ) as temporary:
                 candidate_pattern = str(Path(temporary) / "candidate-%04d.jpg")
                 async with semaphore:
@@ -403,7 +406,7 @@ class ShotKeyframeSelector:
                         "error",
                         "-y",
                         "-ss",
-                        f"{scene.source_range.start_s:.6f}",
+                        f"{shot.source_range.start_s:.6f}",
                         "-i",
                         str(video_path),
                         "-map",
@@ -423,33 +426,26 @@ class ShotKeyframeSelector:
                 if process.returncode != 0:
                     message = stderr.decode("utf-8", errors="replace")[-1200:]
                     raise RuntimeError(
-                        f"Candidate frame extraction failed for {scene.id}: {message}"
+                        f"Candidate frame extraction failed for {shot.id}: {message}"
                     )
                 candidates = sorted(Path(temporary).glob("candidate-*.jpg"))
                 if not candidates:
-                    raise RuntimeError(
-                        f"No candidate frames extracted for {scene.id}"
-                    )
+                    raise RuntimeError(f"No candidate frames extracted for {shot.id}")
                 selected = await asyncio.to_thread(
                     self._select_candidates,
                     candidates,
-                    scene.source_range.start_s,
+                    shot.source_range.start_s,
                     duration,
                     keyframe_count,
                 )
                 for index, (timestamp, source) in enumerate(selected, start=1):
-                    frame_path = output_dir / f"{scene.id}-{index:02d}.jpg"
+                    frame_path = output_dir / f"{shot.id}-{index:02d}.jpg"
                     shutil.copyfile(source, frame_path)
-                    output[scene.id].append(
+                    output[shot.id].append(
                         Keyframe(timestamp_s=timestamp, path=frame_path)
                     )
 
-        await asyncio.gather(
-            *(
-                one(scene)
-                for scene in scenes
-            )
-        )
+        await asyncio.gather(*(one(shot) for shot in shots))
         for frames in output.values():
             frames.sort(key=lambda frame: frame.timestamp_s)
         return output
@@ -578,3 +574,77 @@ class SentenceTransformerEmbeddingProvider:
             show_progress_bar=False,
         )
         return [[float(value) for value in vector] for vector in vectors]
+
+
+class ClipShotVisualEmbeddingProvider:
+    """Create one normalized CLIP image embedding for each shot."""
+
+    def __init__(
+        self,
+        model_name: str = "clip-ViT-B-32",
+        device: str | None = None,
+    ) -> None:
+        self.model_name = model_name
+        self.device = device
+        self._model = None
+        self._dimension = 0
+
+    @property
+    def dimension(self) -> int:
+        if self._model is None:
+            self._load()
+        return self._dimension
+
+    async def embed(self, shots: list[Shot]) -> list[list[float]]:
+        return await asyncio.to_thread(self._embed_sync, shots)
+
+    def _load(self) -> None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for CLIP scene grouping"
+            ) from exc
+        self._model = SentenceTransformer(self.model_name, device=self.device)
+        self._dimension = int(self._model.get_sentence_embedding_dimension())
+
+    def _embed_sync(self, shots: list[Shot]) -> list[list[float]]:
+        if not shots:
+            return []
+        if self._model is None:
+            self._load()
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("Pillow is required for CLIP scene grouping") from exc
+
+        images = []
+        offsets: list[tuple[int, int]] = []
+        for shot in shots:
+            start = len(images)
+            for keyframe in shot.keyframes:
+                with Image.open(keyframe.path) as image:
+                    images.append(image.convert("RGB"))
+            if len(images) == start:
+                raise ValueError(f"Shot {shot.id} has no keyframes")
+            offsets.append((start, len(images)))
+
+        frame_vectors = self._model.encode(
+            images,
+            batch_size=32,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        vectors: list[list[float]] = []
+        for start, end in offsets:
+            mean = [
+                sum(
+                    float(frame_vectors[index][dimension])
+                    for index in range(start, end)
+                )
+                / (end - start)
+                for dimension in range(self._dimension)
+            ]
+            norm = math.sqrt(sum(value * value for value in mean)) or 1.0
+            vectors.append([value / norm for value in mean])
+        return vectors

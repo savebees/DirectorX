@@ -2,16 +2,18 @@
 
 from .backends import (
     AutoTranscriber,
+    ClipShotVisualEmbeddingProvider,
     EmbeddedSubtitleTranscriber,
     FasterWhisperTranscriber,
     HashingEmbeddingProvider,
-    NullTranscriber,
     NoEmbeddedSubtitleError,
+    NullTranscriber,
     PySceneDetectDetector,
     SentenceTransformerEmbeddingProvider,
     ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
 )
+from .grouping import VisualSceneGrouper
 from .indexer import HybridVideoIndexer
 from .store import SceneSearchStore
 from .tools import SceneSearchTools
@@ -20,6 +22,7 @@ from .vlm import OpenAICompatibleDenseCaptioner
 __all__ = [
     "EmbeddedSubtitleTranscriber",
     "AutoTranscriber",
+    "ClipShotVisualEmbeddingProvider",
     "ShotKeyframeSelector",
     "FasterWhisperTranscriber",
     "HashingEmbeddingProvider",
@@ -32,4 +35,5 @@ __all__ = [
     "SceneSearchTools",
     "SentenceTransformerEmbeddingProvider",
     "SidecarSubtitleTranscriber",
+    "VisualSceneGrouper",
 ]

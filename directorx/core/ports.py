@@ -11,9 +11,9 @@ from .models import (
     RenderPlan,
     Scene,
     SceneTags,
+    Shot,
     ShotRequest,
     Storyboard,
-    TimeRange,
     VideoIndex,
 )
 
@@ -22,8 +22,8 @@ class VideoIndexer(Protocol):
     async def build(self, video_path: Path) -> VideoIndex: ...
 
 
-class SceneDetector(Protocol):
-    async def detect(self, video_path: Path, duration_s: float) -> list[TimeRange]: ...
+class ShotDetector(Protocol):
+    async def detect(self, video_path: Path, duration_s: float) -> list[Shot]: ...
 
 
 class Transcriber(Protocol):
@@ -32,8 +32,12 @@ class Transcriber(Protocol):
 
 class KeyframeExtractor(Protocol):
     async def extract(
-        self, video_path: Path, scenes: list[Scene], output_dir: Path
+        self, video_path: Path, shots: list[Shot], output_dir: Path
     ) -> dict[str, list[Keyframe]]: ...
+
+
+class ShotVisualEmbedder(Protocol):
+    async def embed(self, shots: list[Shot]) -> list[list[float]]: ...
 
 
 class DenseCaptioner(Protocol):
