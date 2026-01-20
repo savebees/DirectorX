@@ -52,8 +52,9 @@ def test_vlm_returns_plain_text_and_sends_images(tmp_path: Path) -> None:
     call = client.completions.calls[0]
     assert call["model"] == "Qwen/Qwen3-VL-8B-Instruct"
     assert "response_format" not in call
-    assert "不要打开那扇门" not in call["messages"][1]["content"][0]["text"]
-    image_part = call["messages"][1]["content"][1]
+    assert "English" in call["messages"][0]["content"]
+    assert "Time range" not in call["messages"][0]["content"]
+    image_part = call["messages"][1]["content"][0]
     assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
@@ -70,16 +71,20 @@ class TaggerCompletions:
     async def create(self, **kwargs):
         self.calls.append(kwargs)
         content = (
-            '{"caption":"人物站在仓库中。","tags":["仓库","人物"],'
-            '"characters":["人物"],"actions":["站立"],"location":"仓库",'
-            '"objects":[]}'
+            "CAPTION: A person stands inside a warehouse while warning someone "
+            "not to open a door.\n"
+            "TAGS: warehouse; warning; door\n"
+            "CHARACTERS: person\n"
+            "ACTIONS: standing; warning\n"
+            "LOCATION: warehouse\n"
+            "OBJECTS: door"
         )
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
 
 
-def test_scene_tagger_uses_json_schema_after_dense_caption(tmp_path: Path) -> None:
+def test_scene_tagger_parses_fixed_text_after_dense_caption(tmp_path: Path) -> None:
     completions = TaggerCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     scene = _scene(tmp_path)
@@ -87,8 +92,13 @@ def test_scene_tagger_uses_json_schema_after_dense_caption(tmp_path: Path) -> No
     tagger = OpenAICompatibleSceneTagger(client=client)
     tags = asyncio.run(tagger.tag_batch([scene]))
 
-    assert tags[scene.id].location == "仓库"
-    assert completions.calls[0]["response_format"]["type"] == "json_schema"
+    assert tags[scene.id].location == "warehouse"
+    assert "response_format" not in completions.calls[0]
+    assert len(tags[scene.id].caption) > 20
+    assert tags[scene.id].tags == ["warehouse", "warning", "door"]
+    prompt = completions.calls[0]["messages"][0]["content"]
+    assert "do not quote" in prompt.lower()
+    assert "two" not in prompt.lower()
     assert (
         "dense visual caption" in completions.calls[0]["messages"][1]["content"].lower()
     )

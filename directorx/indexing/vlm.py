@@ -11,12 +11,13 @@ from typing import Any
 
 from directorx.core.models import Scene
 
-SYSTEM_PROMPT = """You describe movie shots for a retrieval system.
-Use only visible evidence in the supplied frames.
-Write a dense factual caption in the requested language. Include people,
-actions, objects, location, visible text, and relationships when they are
-observable. Do not infer identities, hidden events, motives, or plot facts.
-Return plain text only: no JSON, markdown, headings, or bullet points."""
+SYSTEM_PROMPT = (
+    "Generate a detailed dense caption in English for the supplied video frames.\n"
+    "Describe visible people, actions, interactions, objects, setting, location,\n"
+    "visible text, spatial relationships, and important visual details. Mention\n"
+    "changes across frames when relevant.\n"
+    "Return plain text only: no JSON, markdown, headings, or bullet points."
+)
 
 
 class OpenAICompatibleDenseCaptioner:
@@ -29,7 +30,6 @@ class OpenAICompatibleDenseCaptioner:
         base_url: str = "https://api.siliconflow.cn/v1",
         api_key_env: str = "SILICONFLOW_API_KEY",
         api_key: str | None = None,
-        output_language: str = "Simplified Chinese",
         max_parallel: int = 2,
         timeout_s: float = 120.0,
         max_retries: int = 0,
@@ -51,7 +51,6 @@ class OpenAICompatibleDenseCaptioner:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key_env = api_key_env
-        self.output_language = output_language
         self.max_parallel = max_parallel
         self.max_vlm_frames_per_scene = max_vlm_frames_per_scene
         self.max_tokens = max_tokens
@@ -108,7 +107,7 @@ class OpenAICompatibleDenseCaptioner:
             }
             for frame in frames
         ]
-        content = [{"type": "text", "text": self._user_prompt(scene)}, *image_parts]
+        content = image_parts
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": content},
@@ -159,15 +158,6 @@ class OpenAICompatibleDenseCaptioner:
             for index in range(self.max_vlm_frames_per_scene)
         }
         return [frames[index] for index in sorted(indexes)]
-
-    def _user_prompt(self, scene: Scene) -> str:
-        return (
-            f"Write in {self.output_language}.\n"
-            f"Time range: {scene.source_range.start_s:.3f}s to "
-            f"{scene.source_range.end_s:.3f}s.\n"
-            "Describe the complete visible content of this shot in dense but "
-            "concise prose."
-        )
 
     def _data_url(self, path: Path) -> str:
         mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import os
 import re
 import subprocess
@@ -141,19 +140,31 @@ class OpenAICompatibleScreenwriterModel:
 
 
 class OpenAICompatibleSceneTagger:
-    """Normalize a scene's visual caption and transcript into retrieval tags."""
+    """Create an information-rich, searchable record for each scene."""
 
-    SYSTEM_PROMPT = """You normalize video scene metadata for retrieval.
-Use only the supplied transcript and dense visual caption. Do not infer hidden
-events, identities, motives, or plot facts. Return concise normalized metadata:
-- caption: one factual sentence
-- tags: 5-12 short searchable keywords or noun phrases
-- characters: observable people or stable generic labels
-- actions: visible actions
-- location: one concise location or null
-- objects: visible searchable objects
-Avoid duplicates, vague adjectives, and speculative labels.
-Return only the JSON object."""
+    SYSTEM_PROMPT = """Create searchable metadata for one video scene.
+Use the dense visual caption and transcript as your only evidence.
+
+Write CAPTION as a detailed, self-contained description of the scene. Combine
+what is visibly shown with the meaning of relevant dialogue, but do not quote
+or reproduce the dialogue. Describe people, actions, interactions, setting,
+location, objects, visible text, spatial relationships, and any dialogue-based
+context that is supported by the transcript. Use as much concrete detail as
+the evidence supports.
+Do not invent identities, motives, hidden events, or details absent from the
+inputs. Then extract concise searchable labels from the same evidence.
+
+Return exactly these six lines, in this order:
+CAPTION: <information-rich factual caption>
+TAGS: <short keywords or noun phrases separated by semicolons>
+CHARACTERS: <observable people or stable generic labels separated by semicolons>
+ACTIONS: <visible actions separated by semicolons>
+LOCATION: <location, or none>
+OBJECTS: <visible searchable objects separated by semicolons>
+
+Use none for an empty field. Avoid duplicates, vague adjectives, and
+speculative labels. Return plain text only: no JSON, markdown, bullets,
+headings, or extra commentary."""
 
     def __init__(
         self,
@@ -209,30 +220,58 @@ Return only the JSON object."""
             ],
             temperature=0.1,
             max_tokens=self.max_tokens,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "scene_tags",
-                    "strict": True,
-                    "schema": self._scene_tags_schema(),
-                },
-            },
         )
         if not completion.choices:
             raise ValueError(f"Scene tagger returned no choices for {scene.id}")
         content = completion.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
-            raise ValueError(f"Scene tagger returned no JSON for {scene.id}")
-        return scene.id, SceneTags.model_validate_json(content)
+            raise ValueError(f"Scene tagger returned no metadata for {scene.id}")
+        return scene.id, self._parse_response(content, scene.id)
 
     @staticmethod
-    def _scene_tags_schema() -> dict[str, object]:
-        schema = copy.deepcopy(SceneTags.model_json_schema())
-        schema["additionalProperties"] = False
-        schema["required"] = list(schema["properties"])
-        for property_schema in schema["properties"].values():
-            property_schema.pop("default", None)
-        return schema
+    def _parse_response(content: str, scene_id: str) -> SceneTags:
+        fields = ("CAPTION", "TAGS", "CHARACTERS", "ACTIONS", "LOCATION", "OBJECTS")
+        values: dict[str, str] = {}
+        for line in content.strip().splitlines():
+            match = re.fullmatch(
+                r"(CAPTION|TAGS|CHARACTERS|ACTIONS|LOCATION|OBJECTS):\s*(.*)",
+                line,
+            )
+            if match is None:
+                raise ValueError(
+                    f"Scene tagger returned an invalid line for {scene_id}"
+                )
+            name, value = match.groups()
+            if name in values:
+                raise ValueError(f"Scene tagger repeated {name} for {scene_id}")
+            values[name] = value.strip()
+
+        missing = [name for name in fields if name not in values]
+        if missing:
+            raise ValueError(
+                f"Scene tagger omitted fields for {scene_id}: {', '.join(missing)}"
+            )
+        caption = values["CAPTION"]
+        if not caption or caption.lower() == "none":
+            raise ValueError(f"Scene tagger returned an empty caption for {scene_id}")
+
+        def split_items(name: str) -> list[str]:
+            value = values[name]
+            if value.lower() == "none":
+                return []
+            return [item.strip() for item in value.split(";") if item.strip()]
+
+        location = values["LOCATION"]
+        if location.lower() == "none":
+            location = None
+        return SceneTags(
+            caption=caption,
+            tags=split_items("TAGS"),
+            characters=split_items("CHARACTERS"),
+            actions=split_items("ACTIONS"),
+            location=location,
+            objects=split_items("OBJECTS"),
+        )
 
 
 class EdgeSpeechTTS:
