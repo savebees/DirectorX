@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from directorx.agents import DirectorAgent
+from directorx.agents import DirectorAgent, FootageAnalystAgent
 from directorx.coordination import (
     AgentRole,
     ConsultationRequest,
@@ -15,9 +15,14 @@ from directorx.coordination import (
 )
 
 
+class UnusedIndexer:
+    async def build(self, video_path):
+        raise AssertionError("The footage agent is not used in this test")
+
+
 def test_only_director_controls_project_memory_and_tasks(tmp_path) -> None:
     runtime = CoordinationRuntime(tmp_path / "coordination")
-    director = DirectorAgent(runtime)
+    director = DirectorAgent(runtime, FootageAnalystAgent(UnusedIndexer()))
     memory = ProjectMemory(
         project_id="demo",
         brief="Create a suspenseful one-minute edit.",
@@ -35,7 +40,7 @@ def test_only_director_controls_project_memory_and_tasks(tmp_path) -> None:
         task_id="write-001",
         assignee=AgentRole.SCREENWRITER,
         objective="Draft the narration structure.",
-        expected_output="A versioned screenplay artifact.",
+        expected_output="A screenplay artifact.",
         acceptance_criteria=["Ground every plot claim in source evidence"],
     )
     director.delegate(task)

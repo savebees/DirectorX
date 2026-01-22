@@ -38,6 +38,8 @@ Tasks, results, consultations, and decisions are immutable files. A repeated ide
 
 The first implemented specialist capability is `FootageAnalystAgent`: it detects shots, groups adjacent visually similar shots into scenes, selects keyframes, writes dense visual captions, adds normalized retrieval tags, and builds embeddings before returning a searchable `VideoIndex`. Scene grouping uses local CLIP image embeddings and a configurable similarity threshold; subtitles and ASR are used for scene metadata, not for the visual grouping decision. The VLM writes plain-text dense captions; an LLM combines those captions with subtitles or ASR transcripts and writes an information-rich retrieval caption plus normalized labels back to each scene. The tagger returns fixed-format text, which the application parses into its internal model. It does not write creative recommendations or project decisions. The other agents remain independent capability code until their own first capability is defined.
 
+The current coordination path is intentionally narrow: `DirectorAgent` delegates a `TaskContext` to `FootageAnalystAgent`, waits for indexing to finish, and receives a `TaskResult` containing the generated `index.json` and `search.sqlite3` artifact references. Director does not query those artifacts; later, Grounding will use `SceneSearchTools` to locate exact source clips.
+
 ## Setup
 
 Requirements are Python 3.11 or newer and FFmpeg/ffprobe on `PATH`.

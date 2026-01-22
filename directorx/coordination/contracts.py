@@ -24,7 +24,6 @@ class AgentRole(StrEnum):
 class ArtifactRef(StrictModel):
     name: str
     path: Path
-    version: int = Field(gt=0)
 
 
 class ProjectMemory(StrictModel):
@@ -52,8 +51,6 @@ class TaskResult(StrictModel):
     status: Literal["completed", "blocked"]
     summary: str
     output_artifacts: list[ArtifactRef] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-    change_requests: list[str] = Field(default_factory=list)
 
 
 class ConsultationRequest(StrictModel):
