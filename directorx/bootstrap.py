@@ -19,7 +19,10 @@ from directorx.indexing import (
     SidecarSubtitleTranscriber,
     VisualSceneGrouper,
 )
-from directorx.services.providers import OpenAICompatibleSceneTagger
+from directorx.services.providers import (
+    OpenAICompatibleSceneTagger,
+    OpenAICompatibleStoryStructureModel,
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,7 @@ class IndexingRuntime:
     embedding: EmbeddingProvider
     captioner: OpenAICompatibleDenseCaptioner
     tagger: OpenAICompatibleSceneTagger
+    story_structure_model: OpenAICompatibleStoryStructureModel
     indexer: HybridVideoIndexer
 
 
@@ -52,6 +56,15 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         timeout_s=config.llm.timeout_s,
         max_retries=config.llm.retries,
     )
+    story_structure_model = OpenAICompatibleStoryStructureModel(
+        model=config.llm.story_structure_model,
+        base_url=config.llm.base_url,
+        api_key_env=config.llm.api_key_env,
+        max_tokens=config.llm.story_structure_max_tokens,
+        timeout_s=config.llm.timeout_s,
+        max_retries=config.llm.retries,
+        max_scenes_per_chunk=config.llm.story_structure_max_scenes_per_chunk,
+    )
     indexer = HybridVideoIndexer(
         cache_dir=config.resolve(config.paths.cache_dir),
         shot_detector=PySceneDetectDetector(),
@@ -76,6 +89,7 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         embedding=embedding,
         captioner=captioner,
         tagger=tagger,
+        story_structure_model=story_structure_model,
         indexer=indexer,
     )
 

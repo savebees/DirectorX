@@ -50,6 +50,9 @@ screenwriter_model = "gpt-5.6-luna"
 screenwriter_max_tokens = 4000
 scene_tagger_model = "gpt-5.6-luna"
 scene_tagger_max_tokens = 1200
+story_structure_model = "gpt-5.6-luna"
+story_structure_max_tokens = 4000
+story_structure_max_scenes_per_chunk = 24
 timeout_s = 180.0
 retries = 3
 

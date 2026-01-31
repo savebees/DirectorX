@@ -14,6 +14,7 @@ from .models import (
     Shot,
     ShotRequest,
     Storyboard,
+    StorySummary,
     VideoIndex,
 )
 
@@ -59,6 +60,10 @@ class ScreenwriterModel(Protocol):
     async def draft(
         self, prompt: str, video_index: VideoIndex, target_duration_s: float
     ) -> Storyboard: ...
+
+
+class StoryStructureModel(Protocol):
+    async def build(self, video_index: VideoIndex) -> StorySummary: ...
 
 
 class TextToSpeech(Protocol):

@@ -52,7 +52,7 @@ def _probe_duration(path: Path) -> float:
 class HybridVideoIndexer:
     """Shot detection -> visual scene grouping -> captions -> tags -> index."""
 
-    INDEX_VERSION = 9
+    INDEX_VERSION = 10
 
     def __init__(
         self,
@@ -128,6 +128,7 @@ class HybridVideoIndexer:
             if tags is None:
                 raise ValueError(f"Scene tagger omitted {scene.id}")
             scene.caption = tags.caption
+            scene.short_summary = tags.short_summary
             scene.tags = tags.tags
             scene.characters = tags.characters
             scene.actions = tags.actions

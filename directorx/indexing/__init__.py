@@ -14,6 +14,7 @@ from .backends import (
     SidecarSubtitleTranscriber,
 )
 from .grouping import VisualSceneGrouper
+from .hierarchy import validate_story_summary
 from .indexer import HybridVideoIndexer
 from .store import SceneSearchStore
 from .tools import SceneSearchTools
@@ -36,4 +37,5 @@ __all__ = [
     "SentenceTransformerEmbeddingProvider",
     "SidecarSubtitleTranscriber",
     "VisualSceneGrouper",
+    "validate_story_summary",
 ]

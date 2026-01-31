@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from directorx.core.models import SceneInspection, SceneSearchHit
+from directorx.core.models import HierarchySearchHit, SceneInspection, SceneSearchHit
 
 from .store import SceneSearchStore
 
@@ -42,6 +42,19 @@ class SceneSearchTools:
             dialogue_only=True,
             start_s=start_s,
             end_s=end_s,
+        )
+
+    async def search_hierarchy(
+        self,
+        query: str,
+        *,
+        node_type: str | None = None,
+        parent_id: str | None = None,
+        limit: int = 8,
+    ) -> list[HierarchySearchHit]:
+        """Find relevant acts or sequences before searching exact scenes."""
+        return await self.store.search_hierarchy(
+            query, node_type=node_type, parent_id=parent_id, limit=limit
         )
 
     def inspect_scene(self, scene_id: str) -> SceneInspection:

@@ -53,6 +53,7 @@ class Shot(BaseModel):
 
 class SceneTags(BaseModel):
     caption: str
+    short_summary: str
     tags: list[str] = Field(default_factory=list)
     characters: list[str] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
@@ -64,6 +65,7 @@ class Scene(BaseModel):
     id: str
     source_range: TimeRange
     caption: str
+    short_summary: str = ""
     shots: list[Shot] = Field(default_factory=list)
     dense_caption: str = ""
     transcript: str = ""
@@ -82,6 +84,54 @@ class VideoIndex(BaseModel):
     scenes: list[Scene]
     index_version: int = 1
     search_db_path: Path | None = None
+
+
+class StorySequence(BaseModel):
+    id: str
+    title: str
+    short_summary: str
+    scene_ids: list[str]
+    source_range: TimeRange | None = None
+
+
+class StoryAct(BaseModel):
+    id: str
+    title: str
+    short_summary: str
+    sequence_ids: list[str]
+    source_scene_ids: list[str] = Field(default_factory=list)
+    source_range: TimeRange | None = None
+
+
+class CharacterArc(BaseModel):
+    character: str
+    short_summary: str
+    source_scene_ids: list[str] = Field(default_factory=list)
+
+
+class MajorEvent(BaseModel):
+    id: str
+    short_summary: str
+    source_scene_ids: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
+
+
+class StorySummary(BaseModel):
+    title: str
+    short_summary: str
+    sequences: list[StorySequence]
+    acts: list[StoryAct]
+    character_arcs: list[CharacterArc] = Field(default_factory=list)
+    major_events: list[MajorEvent] = Field(default_factory=list)
+
+
+class HierarchySearchHit(BaseModel):
+    node_id: str
+    node_type: str
+    parent_id: str | None = None
+    source_range: TimeRange
+    score: float = Field(ge=0, le=1)
+    short_summary: str
 
 
 class SceneSearchHit(BaseModel):

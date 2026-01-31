@@ -9,9 +9,11 @@ import tempfile
 from pathlib import Path
 
 from directorx.core.models import (
+    HierarchySearchHit,
     Scene,
     SceneInspection,
     SceneSearchHit,
+    StorySummary,
     TimeRange,
     VideoIndex,
 )
@@ -20,6 +22,7 @@ from directorx.core.ports import EmbeddingProvider
 
 def scene_document(scene: Scene) -> str:
     values = [
+        scene.short_summary,
         scene.caption,
         scene.dense_caption,
         scene.transcript,
@@ -132,6 +135,150 @@ class SceneSearchStore:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+    async def add_story_hierarchy(
+        self, index: VideoIndex, summary: StorySummary
+    ) -> None:
+        """Persist film, act, and sequence summaries beside scene search data."""
+        from .hierarchy import validate_story_summary
+
+        summary = validate_story_summary(index, summary)
+        if not self.path.exists():
+            raise FileNotFoundError(self.path)
+        act_by_sequence = {
+            sequence_id: act.id
+            for act in summary.acts
+            for sequence_id in act.sequence_ids
+        }
+        records: list[tuple[str, str, str | None, float, float, str]] = [
+            (
+                "film",
+                "film",
+                None,
+                0.0,
+                index.duration_s,
+                summary.short_summary,
+            )
+        ]
+        records.extend(
+            (
+                act.id,
+                "act",
+                "film",
+                act.source_range.start_s,
+                act.source_range.end_s,
+                act.short_summary,
+            )
+            for act in summary.acts
+            if act.source_range is not None
+        )
+        records.extend(
+            (
+                sequence.id,
+                "sequence",
+                act_by_sequence.get(sequence.id),
+                sequence.source_range.start_s,
+                sequence.source_range.end_s,
+                sequence.short_summary,
+            )
+            for sequence in summary.sequences
+            if sequence.source_range is not None
+        )
+        embeddings = await self.embedding_provider.embed(
+            [record[5] for record in records]
+        )
+        if len(embeddings) != len(records):
+            raise ValueError("Embedding provider returned the wrong number of vectors")
+        with sqlite3.connect(self.path) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS index_nodes (
+                    node_id TEXT PRIMARY KEY,
+                    node_type TEXT NOT NULL,
+                    parent_id TEXT,
+                    start_s REAL NOT NULL,
+                    end_s REAL NOT NULL,
+                    short_summary TEXT NOT NULL,
+                    embedding_json TEXT NOT NULL
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS index_nodes_fts USING fts5(
+                    node_id UNINDEXED,
+                    short_summary
+                );
+                """
+            )
+            if connection.execute("SELECT 1 FROM index_nodes LIMIT 1").fetchone():
+                raise FileExistsError("Story hierarchy already exists in search index")
+            for record, embedding in zip(records, embeddings, strict=True):
+                connection.execute(
+                    "INSERT INTO index_nodes VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (*record, json.dumps(embedding)),
+                )
+                connection.execute(
+                    "INSERT INTO index_nodes_fts VALUES (?, ?)",
+                    (record[0], record[5]),
+                )
+            connection.commit()
+
+    async def search_hierarchy(
+        self,
+        query: str,
+        *,
+        node_type: str | None = None,
+        parent_id: str | None = None,
+        limit: int = 8,
+    ) -> list[HierarchySearchHit]:
+        if not query.strip():
+            raise ValueError("Search query cannot be empty")
+        if limit <= 0:
+            raise ValueError("Search limit must be positive")
+        query_vector = (await self.embedding_provider.embed([query]))[0]
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if node_type is not None:
+            clauses.append("node_type = ?")
+            parameters.append(node_type)
+        if parent_id is not None:
+            clauses.append("parent_id = ?")
+            parameters.append(parent_id)
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            expected_dimension = int(
+                connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'embedding_dimension'"
+                ).fetchone()[0]
+            )
+            if len(query_vector) != expected_dimension:
+                raise ValueError(
+                    f"Embedding dimension mismatch: index={expected_dimension}, "
+                    f"query={len(query_vector)}"
+                )
+            sql = "SELECT * FROM index_nodes"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            rows = list(connection.execute(sql, parameters))
+        query_tokens = _tokens(query)
+        hits = []
+        for row in rows:
+            lexical = len(query_tokens & _tokens(row["short_summary"])) / max(
+                1, len(query_tokens)
+            )
+            semantic = max(
+                0.0, _cosine(query_vector, json.loads(row["embedding_json"]))
+            )
+            hits.append(
+                HierarchySearchHit(
+                    node_id=row["node_id"],
+                    node_type=row["node_type"],
+                    parent_id=row["parent_id"],
+                    source_range=TimeRange(start_s=row["start_s"], end_s=row["end_s"]),
+                    score=min(1.0, semantic * 0.7 + lexical * 0.3),
+                    short_summary=row["short_summary"],
+                )
+            )
+        return sorted(hits, key=lambda hit: (-hit.score, hit.source_range.start_s))[
+            :limit
+        ]
 
     async def search(
         self,

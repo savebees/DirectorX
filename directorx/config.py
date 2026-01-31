@@ -65,6 +65,9 @@ class LLMConfig(BaseModel):
     screenwriter_max_tokens: int = Field(gt=0)
     scene_tagger_model: str
     scene_tagger_max_tokens: int = Field(gt=0)
+    story_structure_model: str = "gpt-5.6-luna"
+    story_structure_max_tokens: int = Field(default=4000, gt=0)
+    story_structure_max_scenes_per_chunk: int = Field(default=24, gt=0)
     timeout_s: float = Field(gt=0)
     retries: int = Field(ge=0)
 

@@ -73,6 +73,7 @@ class TaggerCompletions:
         content = (
             "CAPTION: A person stands inside a warehouse while warning someone "
             "not to open a door.\n"
+            "SHORT_SUMMARY: A person warns someone about a closed door.\n"
             "TAGS: warehouse; warning; door\n"
             "CHARACTERS: person\n"
             "ACTIONS: standing; warning\n"
@@ -95,6 +96,9 @@ def test_scene_tagger_parses_fixed_text_after_dense_caption(tmp_path: Path) -> N
     assert tags[scene.id].location == "warehouse"
     assert "response_format" not in completions.calls[0]
     assert len(tags[scene.id].caption) > 20
+    assert tags[scene.id].short_summary == (
+        "A person warns someone about a closed door."
+    )
     assert tags[scene.id].tags == ["warehouse", "warning", "door"]
     prompt = completions.calls[0]["messages"][0]["content"]
     assert "do not quote" in prompt.lower()
@@ -102,3 +106,18 @@ def test_scene_tagger_parses_fixed_text_after_dense_caption(tmp_path: Path) -> N
     assert (
         "dense visual caption" in completions.calls[0]["messages"][1]["content"].lower()
     )
+    assert "one concise" in prompt.lower()
+
+
+def test_scene_tagger_requires_short_summary() -> None:
+    content = (
+        "CAPTION: A person stands inside a warehouse.\n"
+        "TAGS: warehouse\n"
+        "CHARACTERS: person\n"
+        "ACTIONS: standing\n"
+        "LOCATION: warehouse\n"
+        "OBJECTS: none"
+    )
+
+    with pytest.raises(ValueError, match="SHORT_SUMMARY"):
+        OpenAICompatibleSceneTagger._parse_response(content, "scene-00001")

@@ -11,6 +11,9 @@ from directorx.core.models import (
     Scene,
     SceneTags,
     Shot,
+    StoryAct,
+    StorySequence,
+    StorySummary,
     TimeRange,
 )
 from directorx.indexing import (
@@ -22,6 +25,7 @@ from directorx.indexing import (
     ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
     VisualSceneGrouper,
+    validate_story_summary,
 )
 from directorx.indexing.backends import NoEmbeddedSubtitleError
 
@@ -135,6 +139,9 @@ class FixedTagger:
         return {
             scene.id: SceneTags(
                 caption=scene.dense_caption,
+                short_summary=(
+                    "主角发现秘密箱子" if index == 1 else scene.dense_caption
+                ),
                 tags=["仓库", "悬疑"],
                 characters=["主角"],
                 actions=["寻找" if index == 1 else "移动"],
@@ -308,6 +315,7 @@ def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     assert len(first.scenes) == 3
     assert first.scenes[1].transcript == "我们必须找到秘密箱子"
     assert first.scenes[1].dense_caption == "主角在桌下发现秘密箱子"
+    assert first.scenes[1].short_summary == "主角发现秘密箱子"
     assert first.scenes[1].objects == ["秘密箱子"]
     assert first.search_db_path and first.search_db_path.exists()
 
@@ -351,3 +359,40 @@ def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     assert inspection.previous_scene_id == "scene-00000"
     assert inspection.next_scene_id == "scene-00002"
     assert inspection.scene.keyframes[0].path.exists()
+
+    hierarchy = StorySummary(
+        title="Indexed story",
+        short_summary="A person searches for a box and escapes.",
+        sequences=[
+            StorySequence(
+                id="sequence-0001",
+                title="Search",
+                short_summary="The group searches the warehouse.",
+                scene_ids=["scene-00000", "scene-00001"],
+            ),
+            StorySequence(
+                id="sequence-0002",
+                title="Escape",
+                short_summary="The group leaves before dawn.",
+                scene_ids=["scene-00002"],
+            ),
+        ],
+        acts=[
+            StoryAct(
+                id="act-0001",
+                title="The operation",
+                short_summary="The group searches and escapes.",
+                sequence_ids=["sequence-0001", "sequence-0002"],
+            )
+        ],
+    )
+    hierarchy = validate_story_summary(first, hierarchy)
+    asyncio.run(
+        SceneSearchStore(first.search_db_path, embeddings).add_story_hierarchy(
+            first, hierarchy
+        )
+    )
+    hierarchy_hits = asyncio.run(
+        tools.search_hierarchy("searches warehouse", node_type="sequence", limit=2)
+    )
+    assert hierarchy_hits[0].node_id == "sequence-0001"
