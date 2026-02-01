@@ -269,26 +269,6 @@ def test_auto_transcriber_falls_back_to_whisper_when_no_subtitles() -> None:
     assert [line.text for line in lines] == ["ASR"]
 
 
-def test_screenwriter_context_covers_entire_feature() -> None:
-    scenes = [
-        Scene(
-            id=f"scene-{index:04d}",
-            source_range=TimeRange(start_s=index * 10, end_s=(index + 1) * 10),
-            caption=f"scene {index}",
-            transcript="dialogue",
-        )
-        for index in range(400)
-    ]
-    from directorx.services.providers import OpenAICompatibleScreenwriterModel
-
-    selected = OpenAICompatibleScreenwriterModel._select_context_scenes(
-        scenes, limit=40
-    )
-    assert len(selected) == 40
-    assert selected[0].source_range.start_s < 100
-    assert selected[-1].source_range.start_s > 3800
-
-
 def test_hybrid_index_cache_and_search_tools(tmp_path: Path) -> None:
     video = tmp_path / "movie.mp4"
     _make_video(video)

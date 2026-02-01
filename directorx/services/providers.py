@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -14,10 +15,12 @@ from directorx.core.models import (
     CharacterArc,
     MajorEvent,
     MusicTrack,
+    NarrationDraft,
     Scene,
     SceneTags,
+    Screenplay,
+    ScreenwriterSceneEvidence,
     StoryAct,
-    Storyboard,
     StorySequence,
     StorySummary,
     VideoIndex,
@@ -83,6 +86,19 @@ def _probe_duration(path: Path) -> float:
 class OpenAICompatibleScreenwriterModel:
     """Structured text planning against an OpenAI-compatible model endpoint."""
 
+    SCREENPLAY_SYSTEM_PROMPT = (
+        "You are a professional screenwriter. Your task is to adapt the Director's "
+        "creative brief and the source film's story into a coherent screenplay for "
+        "a video edit. Choose the narrative angle, organize the story into dramatic "
+        "beats, and define what each beat needs to communicate."
+    )
+    NARRATION_SYSTEM_PROMPT = (
+        "You are a professional screenwriter specializing in voice-over scripts. "
+        "Your task is to turn the screenplay and its source evidence into polished "
+        "narration for each beat. The narration should be natural to speak, "
+        "dramatically coherent, and faithful to the source."
+    )
+
     def __init__(
         self,
         *,
@@ -92,65 +108,103 @@ class OpenAICompatibleScreenwriterModel:
         max_tokens: int = 4000,
         timeout_s: float = 120.0,
         max_retries: int = 3,
+        client: Any | None = None,
     ) -> None:
-        secret = os.environ.get(api_key_env, "")
-        if not secret:
-            raise RuntimeError(
-                f"Missing planner API key. Set {api_key_env} in the environment"
+        if client is None:
+            secret = os.environ.get(api_key_env, "")
+            if not secret:
+                raise RuntimeError(
+                    f"Missing planner API key. Set {api_key_env} in the environment"
+                )
+            try:
+                from openai import AsyncOpenAI
+            except ImportError as exc:
+                raise RuntimeError(
+                    "The openai package is required for online story planning"
+                ) from exc
+            client = AsyncOpenAI(
+                api_key=secret,
+                base_url=base_url.rstrip("/"),
+                timeout=timeout_s,
+                max_retries=max_retries,
             )
-        try:
-            from openai import AsyncOpenAI
-        except ImportError as exc:
-            raise RuntimeError(
-                "The openai package is required for online story planning"
-            ) from exc
         self.model = model
         self.max_tokens = max_tokens
-        self._client = AsyncOpenAI(
-            api_key=secret,
-            base_url=base_url.rstrip("/"),
-            timeout=timeout_s,
-            max_retries=max_retries,
+        self._client = client
+
+    async def draft_screenplay(
+        self,
+        objective: str,
+        constraints: list[str],
+        story_summary: StorySummary,
+        target_duration_s: float,
+    ) -> Screenplay:
+        request = (
+            f"Director's creative brief:\n{objective}\n\n"
+            f"Task constraints:\n{self._format_constraints(constraints)}\n\n"
+            f"Target duration: {target_duration_s:.1f} seconds.\n\n"
+            "Complete source story hierarchy:\n"
+            f"{story_summary.model_dump_json(indent=2, exclude_none=True)}"
+        )
+        return await self._complete(
+            self.SCREENPLAY_SYSTEM_PROMPT,
+            request,
+            Screenplay,
+            "screenplay",
         )
 
-    async def draft(
-        self, prompt: str, video_index: VideoIndex, target_duration_s: float
-    ) -> Storyboard:
-        selected_scenes = self._select_context_scenes(video_index.scenes, limit=40)
-        scene_context = "\n".join(
-            f"{scene.id} [{scene.source_range.start_s:.1f}-"
-            f"{scene.source_range.end_s:.1f}s] caption={scene.caption!r}; "
-            f"tags={scene.tags}; dialogue={scene.transcript[:240]!r}"
-            for scene in selected_scenes
-        )
+    async def draft_narration(
+        self,
+        objective: str,
+        constraints: list[str],
+        screenplay: Screenplay,
+        evidence_by_beat: dict[str, list[ScreenwriterSceneEvidence]],
+    ) -> NarrationDraft:
+        evidence = {
+            beat_id: [item.model_dump(mode="json") for item in scenes]
+            for beat_id, scenes in evidence_by_beat.items()
+        }
         request = (
-            "Create a Chinese voice-over storyboard for a film edit. Ground every "
-            "claim in the scene summaries and dialogue; do not invent unsupported "
-            "events and avoid unnecessary spoilers. Each beat's narration must be "
-            "natural for voice delivery, and visual_intent must contain concrete "
-            "searchable imagery. "
-            f"Target duration: about {target_duration_s:.1f} seconds. User brief: "
-            f"{prompt}\n\nScene index:\n{scene_context}"
+            f"Director's creative brief:\n{objective}\n\n"
+            f"Task constraints:\n{self._format_constraints(constraints)}\n\n"
+            "Screenplay:\n"
+            f"{screenplay.model_dump_json(indent=2)}\n\n"
+            "Selected source scene evidence by beat:\n"
+            f"{self._json(evidence)}\n\n"
+            "Write one narration entry for every screenplay beat. Keep each line "
+            "natural for spoken delivery and appropriate to the beat's duration. "
+            "Use only the supplied evidence and do not invent facts, motives, or "
+            "events. Cite the evidence_scene_ids used for each narration. Every "
+            "cited scene must come from that beat's supplied evidence."
         )
-        messages = [
-            {
-                "role": "system",
-                "content": "Return only JSON matching the schema. Do not include "
-                "markdown or explanation.",
-            },
-            {"role": "user", "content": request},
-        ]
+        return await self._complete(
+            self.NARRATION_SYSTEM_PROMPT,
+            request,
+            NarrationDraft,
+            "narration_draft",
+        )
+
+    async def _complete(
+        self,
+        system: str,
+        user: str,
+        schema: type[BaseModel],
+        schema_name: str,
+    ):
         completion = await self._client.chat.completions.create(
             model=self.model,
-            messages=messages,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
             temperature=0.2,
             max_tokens=self.max_tokens,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "storyboard",
+                    "name": schema_name,
                     "strict": True,
-                    "schema": Storyboard.model_json_schema(),
+                    "schema": schema.model_json_schema(),
                 },
             },
         )
@@ -159,31 +213,15 @@ class OpenAICompatibleScreenwriterModel:
         content = completion.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Screenwriter model returned no JSON")
-        return Storyboard.model_validate_json(content)
+        return schema.model_validate_json(content)
 
     @staticmethod
-    def _select_context_scenes(scenes: list[Scene], limit: int) -> list[Scene]:
-        """Keep planner context bounded while preserving visual and dialogue.
+    def _format_constraints(constraints: list[str]) -> str:
+        return "\n".join(f"- {constraint}" for constraint in constraints) or "- None"
 
-        The selected scenes remain representative of the whole source video.
-        """
-        if len(scenes) <= limit:
-            return scenes
-        # Divide the film into temporal buckets instead of taking a prefix. This
-        # keeps a feature-length planner context representative even when every
-        # shot has subtitles and therefore qualifies as evidence.
-        selected: list[Scene] = []
-        scene_count = len(scenes)
-        for bucket in range(limit):
-            start = bucket * scene_count // limit
-            end = max(start + 1, (bucket + 1) * scene_count // limit)
-            candidates = scenes[start:end]
-            evidence = [scene for scene in candidates if scene.dense_caption]
-            if not evidence:
-                evidence = [scene for scene in candidates if scene.transcript]
-            pool = evidence or candidates
-            selected.append(pool[len(pool) // 2])
-        return selected
+    @staticmethod
+    def _json(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, indent=2)
 
 
 class OpenAICompatibleStoryStructureModel:

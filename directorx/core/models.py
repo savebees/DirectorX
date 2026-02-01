@@ -150,18 +150,57 @@ class SceneInspection(BaseModel):
     next_scene_id: str | None = None
 
 
+class ScreenplayBeat(BaseModel):
+    id: str
+    purpose: str
+    story_content: str
+    visual_intent: str
+    mood: str
+    target_duration_s: float = Field(gt=0)
+    source_sequence_ids: list[str]
+
+
+class Screenplay(BaseModel):
+    title: str
+    logline: str
+    narrative_angle: str
+    beats: list[ScreenplayBeat]
+    target_duration_s: float = Field(gt=0)
+
+
+class BeatNarration(BaseModel):
+    beat_id: str
+    narration: str
+    evidence_scene_ids: list[str]
+
+
+class NarrationDraft(BaseModel):
+    beats: list[BeatNarration]
+
+
+class ScreenwriterSceneEvidence(BaseModel):
+    scene_id: str
+    short_summary: str
+    caption: str
+    tags: list[str] = Field(default_factory=list)
+
+
 class StoryBeat(BaseModel):
     id: str
     purpose: str
+    story_content: str
     narration: str
     visual_intent: str
     mood: str
     target_duration_s: float = Field(gt=0)
+    source_sequence_ids: list[str]
+    evidence_scene_ids: list[str]
 
 
 class Storyboard(BaseModel):
     title: str
     logline: str
+    narrative_angle: str
     beats: list[StoryBeat]
     target_duration_s: float = Field(gt=0)
 

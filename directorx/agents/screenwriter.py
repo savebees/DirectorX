@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -11,8 +12,17 @@ from directorx.coordination import (
     TaskContext,
     TaskResult,
 )
-from directorx.core.models import Storyboard, VideoIndex
+from directorx.core.models import (
+    NarrationDraft,
+    Screenplay,
+    ScreenwriterSceneEvidence,
+    StoryBeat,
+    Storyboard,
+    StorySummary,
+    VideoIndex,
+)
 from directorx.core.ports import ScreenwriterModel
+from directorx.indexing import validate_story_summary
 
 
 class ScreenwriterAgent:
@@ -25,14 +35,33 @@ class ScreenwriterAgent:
         self.artifacts_dir = artifacts_dir
 
     async def run(
-        self, prompt: str, index: VideoIndex, target_duration_s: float
+        self,
+        objective: str,
+        constraints: list[str],
+        index: VideoIndex,
+        story_summary: StorySummary,
+        target_duration_s: float,
     ) -> Storyboard:
-        storyboard = await self.model.draft(prompt, index, target_duration_s)
-        if not storyboard.beats:
-            raise ValueError("Screenwriter agent returned no beats")
-        beat_ids = [beat.id for beat in storyboard.beats]
-        if len(beat_ids) != len(set(beat_ids)):
-            raise ValueError("Storyboard beat ids must be unique")
+        screenplay = Screenplay.model_validate(
+            await self.model.draft_screenplay(
+                objective,
+                constraints,
+                story_summary,
+                target_duration_s,
+            )
+        )
+        self._validate_screenplay(screenplay, story_summary, target_duration_s)
+        evidence_by_beat = self._expand_evidence(screenplay, story_summary, index)
+        narration = NarrationDraft.model_validate(
+            await self.model.draft_narration(
+                objective,
+                constraints,
+                screenplay,
+                evidence_by_beat,
+            )
+        )
+        storyboard = self._merge_storyboard(screenplay, narration, evidence_by_beat)
+        self._validate_storyboard(storyboard, target_duration_s)
         return storyboard
 
     async def run_task(
@@ -48,15 +77,22 @@ class ScreenwriterAgent:
             raise ValueError("Screenwriter can only execute its own tasks")
 
         try:
-            index = self._load_video_index(task)
-            storyboard = await self.run(
-                prompt if prompt is not None else task.objective,
-                index,
+            index, story_summary = self._load_source_artifacts(task)
+            duration = (
                 target_duration_s
                 if target_duration_s is not None
-                else self._target_duration(task),
+                else self._target_duration(task)
             )
-            storyboard = Storyboard.model_validate(storyboard)
+            if duration <= 0:
+                raise ValueError("target_duration_s must be positive")
+            constraints = [*task.constraints, *task.acceptance_criteria]
+            storyboard = await self.run(
+                prompt if prompt is not None else task.objective,
+                constraints,
+                index,
+                story_summary,
+                duration,
+            )
             destination = artifacts_dir or self.artifacts_dir
             if destination is None:
                 raise ValueError(
@@ -87,23 +123,200 @@ class ScreenwriterAgent:
         return result
 
     @staticmethod
-    def _load_video_index(task: TaskContext) -> VideoIndex:
+    def _load_source_artifacts(
+        task: TaskContext,
+    ) -> tuple[VideoIndex, StorySummary]:
+        index_path = ScreenwriterAgent._artifact_path(task, "video-index", "index.json")
+        summary_path = ScreenwriterAgent._artifact_path(
+            task, "story-summary", "story-summary.json"
+        )
+        index = VideoIndex.model_validate_json(index_path.read_text(encoding="utf-8"))
+        summary = StorySummary.model_validate_json(
+            summary_path.read_text(encoding="utf-8")
+        )
+        return index, validate_story_summary(index, summary)
+
+    @staticmethod
+    def _artifact_path(task: TaskContext, name: str, filename: str) -> Path:
         references = [
-            artifact
-            for artifact in task.input_artifacts
-            if artifact.name == "video-index"
+            artifact for artifact in task.input_artifacts if artifact.name == name
         ]
-        if len(references) != 1 or references[0].path.name != "index.json":
+        if len(references) != 1 or references[0].path.name != filename:
             raise ValueError(
-                "Screenwriter task must declare exactly one video-index index.json "
+                f"Screenwriter task must declare exactly one {name} {filename} "
                 "input artifact"
             )
-        path = references[0].path
-        return VideoIndex.model_validate_json(path.read_text(encoding="utf-8"))
+        return references[0].path
 
     @staticmethod
     def _target_duration(task: TaskContext) -> float:
         raise ValueError("Screenwriter task requires target_duration_s")
+
+    @staticmethod
+    def _validate_screenplay(
+        screenplay: Screenplay,
+        story_summary: StorySummary,
+        target_duration_s: float,
+    ) -> None:
+        ScreenwriterAgent._require_text(
+            screenplay.title, screenplay.logline, screenplay.narrative_angle
+        )
+        if not screenplay.beats:
+            raise ValueError("Screenwriter model returned no screenplay beats")
+        beat_ids = [beat.id for beat in screenplay.beats]
+        if len(beat_ids) != len(set(beat_ids)):
+            raise ValueError("Screenplay beat ids must be unique")
+        sequence_ids = {sequence.id for sequence in story_summary.sequences}
+        for beat in screenplay.beats:
+            ScreenwriterAgent._require_text(
+                beat.id,
+                beat.purpose,
+                beat.story_content,
+                beat.visual_intent,
+                beat.mood,
+            )
+            if not beat.source_sequence_ids:
+                raise ValueError(f"Screenplay beat {beat.id} has no source sequences")
+            if len(beat.source_sequence_ids) != len(set(beat.source_sequence_ids)):
+                raise ValueError(f"Screenplay beat {beat.id} repeats a source sequence")
+            unknown = set(beat.source_sequence_ids) - sequence_ids
+            if unknown:
+                raise ValueError(
+                    f"Screenplay beat {beat.id} references unknown sequences: "
+                    + ", ".join(sorted(unknown))
+                )
+        ScreenwriterAgent._validate_duration(
+            screenplay.target_duration_s,
+            [beat.target_duration_s for beat in screenplay.beats],
+            target_duration_s,
+        )
+
+    @staticmethod
+    def _expand_evidence(
+        screenplay: Screenplay,
+        story_summary: StorySummary,
+        index: VideoIndex,
+    ) -> dict[str, list[ScreenwriterSceneEvidence]]:
+        sequences = {sequence.id: sequence for sequence in story_summary.sequences}
+        scenes = {scene.id: scene for scene in index.scenes}
+        scene_order = {
+            scene.id: position for position, scene in enumerate(index.scenes)
+        }
+        evidence_by_beat: dict[str, list[ScreenwriterSceneEvidence]] = {}
+        for beat in screenplay.beats:
+            selected_ids = {
+                scene_id
+                for sequence_id in beat.source_sequence_ids
+                for scene_id in sequences[sequence_id].scene_ids
+            }
+            ordered_ids = sorted(selected_ids, key=scene_order.__getitem__)
+            evidence: list[ScreenwriterSceneEvidence] = []
+            for scene_id in ordered_ids:
+                scene = scenes[scene_id]
+                ScreenwriterAgent._require_text(scene.short_summary, scene.caption)
+                evidence.append(
+                    ScreenwriterSceneEvidence(
+                        scene_id=scene_id,
+                        short_summary=scene.short_summary,
+                        caption=scene.caption,
+                        tags=scene.tags,
+                    )
+                )
+            evidence_by_beat[beat.id] = evidence
+        return evidence_by_beat
+
+    @staticmethod
+    def _merge_storyboard(
+        screenplay: Screenplay,
+        narration: NarrationDraft,
+        evidence_by_beat: dict[str, list[ScreenwriterSceneEvidence]],
+    ) -> Storyboard:
+        narration_ids = [beat.beat_id for beat in narration.beats]
+        if len(narration_ids) != len(set(narration_ids)):
+            raise ValueError("Narration beat ids must be unique")
+        screenplay_ids = [beat.id for beat in screenplay.beats]
+        if set(narration_ids) != set(screenplay_ids):
+            raise ValueError(
+                "Narration must contain exactly one entry per screenplay beat"
+            )
+
+        narration_by_id = {beat.beat_id: beat for beat in narration.beats}
+        beats: list[StoryBeat] = []
+        for screenplay_beat in screenplay.beats:
+            narration_beat = narration_by_id[screenplay_beat.id]
+            ScreenwriterAgent._require_text(narration_beat.narration)
+            evidence_ids = narration_beat.evidence_scene_ids
+            if not evidence_ids:
+                raise ValueError(
+                    f"Narration beat {screenplay_beat.id} has no evidence scenes"
+                )
+            if len(evidence_ids) != len(set(evidence_ids)):
+                raise ValueError(
+                    f"Narration beat {screenplay_beat.id} repeats an evidence scene"
+                )
+            allowed_ids = {
+                scene.scene_id for scene in evidence_by_beat[screenplay_beat.id]
+            }
+            unknown = set(evidence_ids) - allowed_ids
+            if unknown:
+                raise ValueError(
+                    f"Narration beat {screenplay_beat.id} references scenes outside "
+                    "its source sequences: " + ", ".join(sorted(unknown))
+                )
+            beats.append(
+                StoryBeat(
+                    id=screenplay_beat.id,
+                    purpose=screenplay_beat.purpose,
+                    story_content=screenplay_beat.story_content,
+                    narration=narration_beat.narration,
+                    visual_intent=screenplay_beat.visual_intent,
+                    mood=screenplay_beat.mood,
+                    target_duration_s=screenplay_beat.target_duration_s,
+                    source_sequence_ids=screenplay_beat.source_sequence_ids,
+                    evidence_scene_ids=evidence_ids,
+                )
+            )
+        return Storyboard(
+            title=screenplay.title,
+            logline=screenplay.logline,
+            narrative_angle=screenplay.narrative_angle,
+            beats=beats,
+            target_duration_s=screenplay.target_duration_s,
+        )
+
+    @staticmethod
+    def _validate_storyboard(storyboard: Storyboard, target_duration_s: float) -> None:
+        Storyboard.model_validate(storyboard)
+        ScreenwriterAgent._require_text(
+            storyboard.title, storyboard.logline, storyboard.narrative_angle
+        )
+        if not storyboard.beats:
+            raise ValueError("Screenwriter agent returned no storyboard beats")
+        ScreenwriterAgent._validate_duration(
+            storyboard.target_duration_s,
+            [beat.target_duration_s for beat in storyboard.beats],
+            target_duration_s,
+        )
+
+    @staticmethod
+    def _validate_duration(
+        declared_duration_s: float,
+        beat_durations_s: list[float],
+        target_duration_s: float,
+    ) -> None:
+        if not math.isclose(declared_duration_s, target_duration_s, abs_tol=0.1):
+            raise ValueError("Screenplay target duration does not match the task")
+        if not math.isclose(sum(beat_durations_s), declared_duration_s, abs_tol=0.1):
+            raise ValueError(
+                "Screenplay beat durations do not match its target duration"
+            )
+
+    @staticmethod
+    def _require_text(*values: str) -> None:
+        if any(not value.strip() for value in values):
+            raise ValueError(
+                "Screenwriter output contains an empty required text field"
+            )
 
     @staticmethod
     def _persist_storyboard(storyboard: Storyboard, artifacts_dir: Path) -> Path:

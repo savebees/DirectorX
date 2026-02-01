@@ -8,12 +8,14 @@ from .models import (
     DialogueLine,
     Keyframe,
     MusicTrack,
+    NarrationDraft,
     RenderPlan,
     Scene,
     SceneTags,
+    Screenplay,
+    ScreenwriterSceneEvidence,
     Shot,
     ShotRequest,
-    Storyboard,
     StorySummary,
     VideoIndex,
 )
@@ -57,9 +59,21 @@ class EmbeddingProvider(Protocol):
 
 
 class ScreenwriterModel(Protocol):
-    async def draft(
-        self, prompt: str, video_index: VideoIndex, target_duration_s: float
-    ) -> Storyboard: ...
+    async def draft_screenplay(
+        self,
+        objective: str,
+        constraints: list[str],
+        story_summary: StorySummary,
+        target_duration_s: float,
+    ) -> Screenplay: ...
+
+    async def draft_narration(
+        self,
+        objective: str,
+        constraints: list[str],
+        screenplay: Screenplay,
+        evidence_by_beat: dict[str, list[ScreenwriterSceneEvidence]],
+    ) -> NarrationDraft: ...
 
 
 class StoryStructureModel(Protocol):
