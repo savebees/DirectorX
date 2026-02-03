@@ -61,6 +61,16 @@ provider = "edge"
 voice = "zh-CN-XiaoxiaoNeural"
 rate = 185
 
+[grounding]
+candidate_limit = 4
+candidate_padding_s = 1.0
+coarse_fps = 1.0
+refine_fps = 6.0
+refine_margin_s = 2.0
+max_coarse_frames = 24
+max_refine_frames = 24
+max_parallel = 2
+
 [render]
 enabled = false
 aspect = "landscape"

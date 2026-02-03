@@ -16,6 +16,9 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert config.scene_grouping.max_scene_duration_s == 15.0
     assert config.llm.screenwriter_model == "gpt-5.6-luna"
     assert config.transcription.provider == "auto"
+    assert config.grounding.candidate_limit == 4
+    assert config.grounding.coarse_fps == 1
+    assert config.grounding.refine_fps == 6
     assert config.resolve(config.paths.artifacts_dir).name == "artifacts"
     assert config.render.dimensions == (1920, 1080)
 

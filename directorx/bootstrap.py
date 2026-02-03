@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from directorx.agents.grounding import GroundingAgent, SceneRetriever
 from directorx.agents.narration import NarrationAgent
 from directorx.config import AppConfig
 from directorx.core.ports import EmbeddingProvider, Transcriber
@@ -19,6 +20,10 @@ from directorx.indexing import (
     ShotKeyframeSelector,
     SidecarSubtitleTranscriber,
     VisualSceneGrouper,
+)
+from directorx.services.grounding import (
+    FFmpegGroundingFrameExtractor,
+    OpenAICompatibleGroundingModel,
 )
 from directorx.services.providers import (
     EdgeSpeechTTS,
@@ -42,6 +47,33 @@ def create_narration_agent(config: AppConfig) -> NarrationAgent:
             voice=config.tts.voice,
             rate=config.tts.rate,
         )
+    )
+
+
+def create_grounding_agent(config: AppConfig) -> GroundingAgent:
+    embedding = _create_embedding(config)
+    grounding = config.grounding
+    return GroundingAgent(
+        OpenAICompatibleGroundingModel(
+            model=config.vlm.model,
+            base_url=config.vlm.base_url,
+            api_key_env=config.vlm.api_key_env,
+            max_tokens=config.vlm.max_tokens,
+            timeout_s=config.vlm.timeout_s,
+            max_retries=config.vlm.retries,
+            request_interval_s=config.vlm.request_interval_s,
+        ),
+        SceneRetriever(embedding),
+        FFmpegGroundingFrameExtractor(config.vlm.max_image_dimension),
+        artifacts_dir=config.resolve(config.paths.artifacts_dir),
+        candidate_limit=grounding.candidate_limit,
+        candidate_padding_s=grounding.candidate_padding_s,
+        coarse_fps=grounding.coarse_fps,
+        refine_fps=grounding.refine_fps,
+        refine_margin_s=grounding.refine_margin_s,
+        max_coarse_frames=grounding.max_coarse_frames,
+        max_refine_frames=grounding.max_refine_frames,
+        max_parallel=grounding.max_parallel,
     )
 
 

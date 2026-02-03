@@ -78,6 +78,17 @@ class TTSConfig(BaseModel):
     rate: int = Field(gt=0)
 
 
+class GroundingConfig(BaseModel):
+    candidate_limit: int = Field(gt=0)
+    candidate_padding_s: float = Field(ge=0)
+    coarse_fps: float = Field(gt=0)
+    refine_fps: float = Field(gt=0)
+    refine_margin_s: float = Field(ge=0)
+    max_coarse_frames: int = Field(gt=0)
+    max_refine_frames: int = Field(gt=0)
+    max_parallel: int = Field(gt=0)
+
+
 class RenderConfig(BaseModel):
     enabled: bool
     aspect: Literal["portrait", "landscape", "square"]
@@ -106,6 +117,7 @@ class AppConfig(BaseModel):
     vlm: VLMConfig
     llm: LLMConfig
     tts: TTSConfig
+    grounding: GroundingConfig
     render: RenderConfig
     edit: EditConfig
 

@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Protocol
 
 from .models import (
-    CandidateScore,
     DialogueLine,
+    GroundingCandidate,
+    GroundingDecision,
+    GroundingFrame,
     Keyframe,
     MusicTrack,
     NarrationDraft,
@@ -17,6 +19,7 @@ from .models import (
     Shot,
     ShotRequest,
     StorySummary,
+    TimeRange,
     VideoIndex,
 )
 
@@ -87,9 +90,32 @@ class TextToSpeech(Protocol):
 
 
 class GroundingModel(Protocol):
-    async def score(
-        self, shot: ShotRequest, candidates: list[Scene]
-    ) -> list[CandidateScore]: ...
+    async def locate(
+        self,
+        shot: ShotRequest,
+        candidate: GroundingCandidate,
+        frames: list[GroundingFrame],
+    ) -> GroundingDecision: ...
+
+    async def refine(
+        self,
+        shot: ShotRequest,
+        candidate: GroundingCandidate,
+        frames: list[GroundingFrame],
+    ) -> GroundingDecision: ...
+
+
+class GroundingFrameExtractor(Protocol):
+    async def extract(
+        self,
+        video_path: Path,
+        source_range: TimeRange,
+        output_dir: Path,
+        *,
+        fps: float,
+        max_frames: int,
+        prefix: str,
+    ) -> list[GroundingFrame]: ...
 
 
 class MusicLibrary(Protocol):

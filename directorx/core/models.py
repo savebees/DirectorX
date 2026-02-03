@@ -223,24 +223,68 @@ class ShotRequest(BaseModel):
     id: str
     beat_id: str
     narration_text: str
+    story_content: str
     visual_query: str
     mood: str
     target_duration_s: float = Field(gt=0)
+    source_sequence_ids: list[str]
+    evidence_scene_ids: list[str]
 
 
-class CandidateScore(BaseModel):
-    scene_id: str
-    score: float = Field(ge=0, le=1)
+class GroundingCandidate(BaseModel):
+    id: str
+    anchor_scene_id: str
+    scene_ids: list[str]
+    source_range: TimeRange
+    retrieval_score: float = Field(ge=0, le=1)
+    proposal_range: TimeRange | None = None
+
+
+class GroundingFrame(BaseModel):
+    id: str
+    timestamp_s: Seconds
+    path: Path
+
+
+class GroundingDecision(BaseModel):
+    matched: bool
+    source_range: TimeRange | None
+    confidence: float = Field(ge=0, le=1)
+    evidence_frame_ids: list[str]
     rationale: str
+
+    @model_validator(mode="after")
+    def match_has_evidence(self) -> GroundingDecision:
+        if self.matched and self.source_range is None:
+            raise ValueError("A matched grounding decision requires a source range")
+        if not self.matched and self.source_range is not None:
+            raise ValueError(
+                "An unmatched grounding decision cannot have a source range"
+            )
+        if self.matched and not self.evidence_frame_ids:
+            raise ValueError("A matched grounding decision requires frame evidence")
+        if not self.matched and self.evidence_frame_ids:
+            raise ValueError("An unmatched grounding decision cannot cite frames")
+        return self
 
 
 class GroundedClip(BaseModel):
     shot_id: str
     beat_id: str
+    source_scene_ids: list[str]
     source_range: TimeRange
     target_duration_s: float = Field(gt=0)
     confidence: float = Field(ge=0, le=1)
+    evidence_frame_ids: list[str]
+    evidence_timestamps_s: list[Seconds]
     rationale: str
+
+
+class GroundingManifest(BaseModel):
+    source_video: Path
+    clips: list[GroundedClip]
+    target_duration_s: float = Field(gt=0)
+    source_duration_s: float = Field(gt=0)
 
 
 class MusicTrack(BaseModel):
