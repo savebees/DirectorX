@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from directorx.agents.narration import NarrationAgent
 from directorx.config import AppConfig
 from directorx.core.ports import EmbeddingProvider, Transcriber
 from directorx.indexing import (
@@ -20,6 +21,7 @@ from directorx.indexing import (
     VisualSceneGrouper,
 )
 from directorx.services.providers import (
+    EdgeSpeechTTS,
     OpenAICompatibleSceneTagger,
     OpenAICompatibleStoryStructureModel,
 )
@@ -32,6 +34,15 @@ class IndexingRuntime:
     tagger: OpenAICompatibleSceneTagger
     story_structure_model: OpenAICompatibleStoryStructureModel
     indexer: HybridVideoIndexer
+
+
+def create_narration_agent(config: AppConfig) -> NarrationAgent:
+    return NarrationAgent(
+        EdgeSpeechTTS(
+            voice=config.tts.voice,
+            rate=config.tts.rate,
+        )
+    )
 
 
 def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:

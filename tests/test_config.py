@@ -1,6 +1,8 @@
 from pathlib import Path
 
+from directorx.bootstrap import create_narration_agent
 from directorx.config import AppConfig
+from directorx.services.providers import EdgeSpeechTTS
 
 
 def test_project_config_loads_from_one_entrypoint() -> None:
@@ -16,3 +18,8 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert config.transcription.provider == "auto"
     assert config.resolve(config.paths.artifacts_dir).name == "artifacts"
     assert config.render.dimensions == (1920, 1080)
+
+    narration = create_narration_agent(config)
+    assert isinstance(narration.tts, EdgeSpeechTTS)
+    assert narration.tts.voice == "zh-CN-XiaoxiaoNeural"
+    assert narration.tts.rate == 185

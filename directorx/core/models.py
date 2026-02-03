@@ -209,6 +209,13 @@ class NarrationSegment(BaseModel):
     beat_id: str
     text: str
     audio_path: Path
+    target_duration_s: float = Field(gt=0)
+    duration_s: float = Field(gt=0)
+
+
+class NarrationManifest(BaseModel):
+    segments: list[NarrationSegment]
+    target_duration_s: float = Field(gt=0)
     duration_s: float = Field(gt=0)
 
 
