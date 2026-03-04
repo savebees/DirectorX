@@ -71,6 +71,14 @@ max_coarse_frames = 24
 max_refine_frames = 24
 max_parallel = 2
 
+[sound]
+embedding_model = "laion/larger_clap_music"
+device = "auto"
+analysis_window_s = 10.0
+analysis_windows_per_track = 3
+gain_db = -23.0
+duck_under_voice_db = -9.0
+
 [render]
 enabled = false
 aspect = "landscape"

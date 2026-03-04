@@ -1,12 +1,57 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from directorx.core.models import (
     GroundingCandidate,
     GroundingDecision,
     GroundingFrame,
+    MusicTrack,
     ShotRequest,
     TimeRange,
 )
+
+
+class FixedMusicLibrary:
+    def __init__(self, tracks: list[MusicTrack]) -> None:
+        self._tracks = tracks
+        self.calls = 0
+
+    async def tracks(self) -> list[MusicTrack]:
+        self.calls += 1
+        return self._tracks
+
+
+class FixedAudioTextEmbeddingProvider:
+    def __init__(
+        self,
+        audio_embeddings: dict[str, list[list[float]]],
+        *,
+        text_embedding: list[float] | None = None,
+        failing_path: Path | None = None,
+        model_name: str | None = None,
+    ) -> None:
+        self.audio_embeddings = audio_embeddings
+        self.text_embedding = text_embedding or [1.0, 0.0]
+        self.failing_path = failing_path
+        self.model_name = model_name
+        self.text_calls: list[str] = []
+        self.audio_calls: list[tuple[Path, list[TimeRange]]] = []
+
+    async def embed_text(self, text: str) -> list[float]:
+        self.text_calls.append(text)
+        return self.text_embedding
+
+    async def embed_audio(
+        self, path: Path, windows: list[TimeRange]
+    ) -> list[list[float]]:
+        self.audio_calls.append((path, windows))
+        if path == self.failing_path:
+            raise RuntimeError("audio embedding unavailable")
+        values = self.audio_embeddings[path.name]
+        if len(values) == 1:
+            return values * len(windows)
+        return values
 
 
 class FixedGroundingModel:

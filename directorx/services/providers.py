@@ -620,11 +620,11 @@ class DirectoryMusicLibrary:
     async def tracks(self) -> list[MusicTrack]:
         if not self.directory.is_dir():
             raise NotADirectoryError(self.directory)
-        paths = [
+        paths = sorted(
             path
             for path in self.directory.iterdir()
             if path.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".flac"}
-        ]
+        )
         if not paths:
             raise ValueError(f"No supported music files in {self.directory}")
         tracks = []

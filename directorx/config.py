@@ -89,6 +89,15 @@ class GroundingConfig(BaseModel):
     max_parallel: int = Field(gt=0)
 
 
+class SoundConfig(BaseModel):
+    embedding_model: str
+    device: str
+    analysis_window_s: float = Field(gt=0)
+    analysis_windows_per_track: int = Field(gt=0)
+    gain_db: float
+    duck_under_voice_db: float
+
+
 class RenderConfig(BaseModel):
     enabled: bool
     aspect: Literal["portrait", "landscape", "square"]
@@ -118,6 +127,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig
     tts: TTSConfig
     grounding: GroundingConfig
+    sound: SoundConfig
     render: RenderConfig
     edit: EditConfig
 

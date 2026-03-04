@@ -9,6 +9,7 @@ from .models import (
     GroundingDecision,
     GroundingFrame,
     Keyframe,
+    MusicIndex,
     MusicTrack,
     NarrationDraft,
     RenderPlan,
@@ -120,6 +121,18 @@ class GroundingFrameExtractor(Protocol):
 
 class MusicLibrary(Protocol):
     async def tracks(self) -> list[MusicTrack]: ...
+
+
+class AudioTextEmbeddingProvider(Protocol):
+    async def embed_text(self, text: str) -> list[float]: ...
+
+    async def embed_audio(
+        self, path: Path, windows: list[TimeRange]
+    ) -> list[list[float]]: ...
+
+
+class MusicIndexBuilder(Protocol):
+    async def build(self) -> MusicIndex: ...
 
 
 class RenderEngine(Protocol):

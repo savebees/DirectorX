@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Seconds = Annotated[float, Field(ge=0)]
 
@@ -294,10 +294,31 @@ class MusicTrack(BaseModel):
     duration_s: float = Field(gt=0)
 
 
+class MusicIndexEntry(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    track: MusicTrack
+    embedding: list[float]
+    analysis_windows: list[TimeRange]
+    model_name: str
+
+
+class MusicIndex(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    index_version: int = 1
+    model_name: str
+    embedding_dimension: int = Field(gt=0)
+    entries: list[MusicIndexEntry]
+
+
 class SoundPlan(BaseModel):
     track: MusicTrack
+    target_duration_s: float = Field(gt=0)
+    match_score: float = Field(ge=-1, le=1)
     gain_db: float = -23.0
     duck_under_voice_db: float = -9.0
+    selection_rationale: str
 
 
 class RenderPlan(BaseModel):

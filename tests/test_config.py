@@ -1,8 +1,9 @@
 from pathlib import Path
 
-from directorx.bootstrap import create_narration_agent
+from directorx.bootstrap import create_narration_agent, create_sound_agent
 from directorx.config import AppConfig
-from directorx.services.providers import EdgeSpeechTTS
+from directorx.services.providers import DirectoryMusicLibrary, EdgeSpeechTTS
+from directorx.services.sound import LocalClapAudioTextEmbeddingProvider
 
 
 def test_project_config_loads_from_one_entrypoint() -> None:
@@ -19,6 +20,8 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert config.grounding.candidate_limit == 4
     assert config.grounding.coarse_fps == 1
     assert config.grounding.refine_fps == 6
+    assert config.sound.embedding_model == "laion/larger_clap_music"
+    assert config.sound.analysis_windows_per_track == 3
     assert config.resolve(config.paths.artifacts_dir).name == "artifacts"
     assert config.render.dimensions == (1920, 1080)
 
@@ -26,3 +29,9 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert isinstance(narration.tts, EdgeSpeechTTS)
     assert narration.tts.voice == "zh-CN-XiaoxiaoNeural"
     assert narration.tts.rate == 185
+
+    sound = create_sound_agent(config)
+    assert isinstance(sound.music_library, DirectoryMusicLibrary)
+    assert isinstance(sound.embedding_provider, LocalClapAudioTextEmbeddingProvider)
+    assert sound.embedding_provider.model_name == "laion/larger_clap_music"
+    assert sound.analysis_window_s == 10

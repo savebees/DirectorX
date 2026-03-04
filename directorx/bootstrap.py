@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from directorx.agents.grounding import GroundingAgent, SceneRetriever
 from directorx.agents.narration import NarrationAgent
+from directorx.agents.sound import SoundAgent
 from directorx.config import AppConfig
 from directorx.core.ports import EmbeddingProvider, Transcriber
 from directorx.indexing import (
@@ -26,9 +27,14 @@ from directorx.services.grounding import (
     OpenAICompatibleGroundingModel,
 )
 from directorx.services.providers import (
+    DirectoryMusicLibrary,
     EdgeSpeechTTS,
     OpenAICompatibleSceneTagger,
     OpenAICompatibleStoryStructureModel,
+)
+from directorx.services.sound import (
+    LocalClapAudioTextEmbeddingProvider,
+    LocalMusicIndexBuilder,
 )
 
 
@@ -74,6 +80,39 @@ def create_grounding_agent(config: AppConfig) -> GroundingAgent:
         max_coarse_frames=grounding.max_coarse_frames,
         max_refine_frames=grounding.max_refine_frames,
         max_parallel=grounding.max_parallel,
+    )
+
+
+def create_sound_agent(config: AppConfig) -> SoundAgent:
+    sound = config.sound
+    provider = LocalClapAudioTextEmbeddingProvider(
+        sound.embedding_model,
+        device=sound.device,
+    )
+    return SoundAgent(
+        DirectoryMusicLibrary(config.resolve(config.paths.music_dir)),
+        provider,
+        artifacts_dir=config.resolve(config.paths.artifacts_dir),
+        analysis_window_s=sound.analysis_window_s,
+        analysis_windows_per_track=sound.analysis_windows_per_track,
+        gain_db=sound.gain_db,
+        duck_under_voice_db=sound.duck_under_voice_db,
+        require_music_index=True,
+    )
+
+
+def create_music_index_builder(config: AppConfig) -> LocalMusicIndexBuilder:
+    sound = config.sound
+    provider = LocalClapAudioTextEmbeddingProvider(
+        sound.embedding_model,
+        device=sound.device,
+    )
+    return LocalMusicIndexBuilder(
+        DirectoryMusicLibrary(config.resolve(config.paths.music_dir)),
+        provider,
+        model_name=sound.embedding_model,
+        analysis_window_s=sound.analysis_window_s,
+        analysis_windows_per_track=sound.analysis_windows_per_track,
     )
 
 
