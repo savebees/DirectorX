@@ -98,6 +98,10 @@ class SoundConfig(BaseModel):
     duck_under_voice_db: float
 
 
+class ReviewConfig(BaseModel):
+    max_frames: int = Field(gt=0)
+
+
 class RenderConfig(BaseModel):
     enabled: bool
     aspect: Literal["portrait", "landscape", "square"]
@@ -128,6 +132,7 @@ class AppConfig(BaseModel):
     tts: TTSConfig
     grounding: GroundingConfig
     sound: SoundConfig
+    review: ReviewConfig
     render: RenderConfig
     edit: EditConfig
 

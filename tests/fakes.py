@@ -7,9 +7,41 @@ from directorx.core.models import (
     GroundingDecision,
     GroundingFrame,
     MusicTrack,
+    ReviewReport,
     ShotRequest,
     TimeRange,
 )
+
+
+class FixedReviewFrameExtractor:
+    def __init__(self, frames: list[GroundingFrame]) -> None:
+        self.frames = frames
+        self.calls: list[tuple[Path, Path, int]] = []
+
+    async def extract(
+        self, video_path: Path, output_dir: Path, *, max_frames: int
+    ) -> list[GroundingFrame]:
+        self.calls.append((video_path, output_dir, max_frames))
+        return self.frames
+
+
+class FixedReviewModel:
+    def __init__(
+        self, report: ReviewReport | None = None, failure: Exception | None = None
+    ) -> None:
+        self.report = report or ReviewReport(
+            passed=True, summary="Video is complete and coherent."
+        )
+        self.failure = failure
+        self.calls: list[tuple[float, list[GroundingFrame]]] = []
+
+    async def inspect(
+        self, duration_s: float, frames: list[GroundingFrame]
+    ) -> ReviewReport:
+        self.calls.append((duration_s, frames))
+        if self.failure is not None:
+            raise self.failure
+        return self.report
 
 
 class FixedMusicLibrary:

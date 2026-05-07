@@ -13,6 +13,7 @@ from .models import (
     MusicTrack,
     NarrationDraft,
     RenderPlan,
+    ReviewReport,
     Scene,
     SceneTags,
     Screenplay,
@@ -137,3 +138,15 @@ class MusicIndexBuilder(Protocol):
 
 class RenderEngine(Protocol):
     async def render(self, plan: RenderPlan) -> Path: ...
+
+
+class ReviewFrameExtractor(Protocol):
+    async def extract(
+        self, video_path: Path, output_dir: Path, *, max_frames: int
+    ) -> list[GroundingFrame]: ...
+
+
+class ReviewModel(Protocol):
+    async def inspect(
+        self, duration_s: float, frames: list[GroundingFrame]
+    ) -> ReviewReport: ...

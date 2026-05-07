@@ -54,6 +54,8 @@ A Sound task explicitly references `storyboard.json`, `narration/narration.json`
 
 The indexer scans the configured music directory, samples each track at evenly spaced windows, encodes those windows once with the local `laion/larger_clap_music` checkpoint, averages and normalizes the vectors, and atomically persists track metadata, windows, vectors, model name, and vector dimension under the configured artifacts directory. Hugging Face downloads the approximately 780 MB CLAP checkpoint into its normal local cache on first use; weights are not copied into this repository. At task time, `SoundAgent` loads the validated index, encodes only the current storyboard query as text, and ranks the stored vectors, with filename-derived tags used only to break score ties. It selects exactly one track, records the complete edit duration and mix intent in `sound-plan.json`, and submits its own result. A short track is valid because rendering can loop it, while a long track can be trimmed. Missing or incompatible index inputs, model failures, and persistence failures produce a blocked result.
 
+A Review task references only the rendered video artifact. `ReviewAgent` extracts a small timestamped frame sample and makes one multimodal review call covering narrative completeness, flow, and obvious visible editing errors. It persists the validated decision as `review.json` and submits its own result; a clear defect is reported as blocked for the Director to decide on the next revision, while stylistic preferences do not block the edit.
+
 ## Setup
 
 Requirements are Python 3.11 or newer and FFmpeg/ffprobe on `PATH`.

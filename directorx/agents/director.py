@@ -15,6 +15,7 @@ from directorx.coordination.runtime import CoordinationRuntime
 from .footage import FootageAnalystAgent
 from .grounding import GroundingAgent
 from .narration import NarrationAgent
+from .review import ReviewAgent
 from .screenwriter import ScreenwriterAgent
 from .sound import SoundAgent
 
@@ -35,6 +36,7 @@ class DirectorAgent:
         narration_agent: NarrationAgent | None = None,
         grounding_agent: GroundingAgent | None = None,
         sound_agent: SoundAgent | None = None,
+        review_agent: ReviewAgent | None = None,
     ) -> None:
         if screenwriter is not None and screenwriter_agent is not None:
             raise ValueError("Provide only one Screenwriter agent")
@@ -46,6 +48,7 @@ class DirectorAgent:
         self.narration_agent = narration_agent
         self.grounding_agent = grounding_agent
         self.sound_agent = sound_agent
+        self.review_agent = review_agent
         self.artifacts_dir = artifacts_dir or runtime.store.root / "artifacts"
 
     def initialize_project(self, memory: ProjectMemory) -> Path:
@@ -139,6 +142,23 @@ class DirectorAgent:
             raise ValueError("Director has no Sound agent")
         self.delegate(task)
         await self.sound_agent.run_task(
+            task,
+            self.runtime,
+            artifacts_dir or self.artifacts_dir,
+        )
+        return self.read_result(task.task_id)
+
+    async def run_review_task(
+        self,
+        task: TaskContext,
+        artifacts_dir: Path | None = None,
+    ) -> TaskResult:
+        if task.assignee != AgentRole.REVIEW:
+            raise ValueError("Director can only run a Review task here")
+        if self.review_agent is None:
+            raise ValueError("Director has no Review agent")
+        self.delegate(task)
+        await self.review_agent.run_task(
             task,
             self.runtime,
             artifacts_dir or self.artifacts_dir,

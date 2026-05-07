@@ -79,6 +79,9 @@ analysis_windows_per_track = 3
 gain_db = -23.0
 duck_under_voice_db = -9.0
 
+[review]
+max_frames = 12
+
 [render]
 enabled = false
 aspect = "landscape"

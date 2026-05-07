@@ -22,6 +22,7 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert config.grounding.refine_fps == 6
     assert config.sound.embedding_model == "laion/larger_clap_music"
     assert config.sound.analysis_windows_per_track == 3
+    assert config.review.max_frames == 12
     assert config.resolve(config.paths.artifacts_dir).name == "artifacts"
     assert config.render.dimensions == (1920, 1080)
 

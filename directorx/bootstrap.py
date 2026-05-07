@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from directorx.agents.grounding import GroundingAgent, SceneRetriever
 from directorx.agents.narration import NarrationAgent
+from directorx.agents.review import ReviewAgent
 from directorx.agents.sound import SoundAgent
 from directorx.config import AppConfig
 from directorx.core.ports import EmbeddingProvider, Transcriber
@@ -31,6 +32,10 @@ from directorx.services.providers import (
     EdgeSpeechTTS,
     OpenAICompatibleSceneTagger,
     OpenAICompatibleStoryStructureModel,
+)
+from directorx.services.review import (
+    FFmpegReviewFrameExtractor,
+    OpenAICompatibleReviewModel,
 )
 from directorx.services.sound import (
     LocalClapAudioTextEmbeddingProvider,
@@ -113,6 +118,22 @@ def create_music_index_builder(config: AppConfig) -> LocalMusicIndexBuilder:
         model_name=sound.embedding_model,
         analysis_window_s=sound.analysis_window_s,
         analysis_windows_per_track=sound.analysis_windows_per_track,
+    )
+
+
+def create_review_agent(config: AppConfig) -> ReviewAgent:
+    return ReviewAgent(
+        OpenAICompatibleReviewModel(
+            model=config.vlm.model,
+            base_url=config.vlm.base_url,
+            api_key_env=config.vlm.api_key_env,
+            max_tokens=config.vlm.max_tokens,
+            timeout_s=config.vlm.timeout_s,
+            max_retries=config.vlm.retries,
+        ),
+        FFmpegReviewFrameExtractor(),
+        artifacts_dir=config.resolve(config.paths.artifacts_dir),
+        max_frames=config.review.max_frames,
     )
 
 

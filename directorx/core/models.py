@@ -321,6 +321,17 @@ class SoundPlan(BaseModel):
     selection_rationale: str
 
 
+class ReviewIssue(BaseModel):
+    timestamp_s: Seconds | None = None
+    description: str
+
+
+class ReviewReport(BaseModel):
+    passed: bool
+    summary: str
+    issues: list[ReviewIssue] = Field(default_factory=list)
+
+
 class RenderPlan(BaseModel):
     source_video: Path
     clips: list[GroundedClip]
