@@ -1,6 +1,10 @@
 <h1 align="center"><img src="assets/directorx-logo.png" alt="DirectorX logo" width="64" height="64" valign="middle"> DirectorX</h1>
 
 <p align="center">
+  <em>一个由导演 Agent 主导的视频剪辑多智能体系统。</em>
+</p>
+
+<p align="center">
   <a href="README.md"><ins>English</ins></a> | 简体中文
 </p>
 

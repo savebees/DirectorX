@@ -1,6 +1,10 @@
 <h1 align="center"><img src="assets/directorx-logo.png" alt="DirectorX logo" width="64" height="64" valign="middle"> DirectorX</h1>
 
 <p align="center">
+  <em>A director-led multi-agent system for video editing.</em>
+</p>
+
+<p align="center">
   English | <a href="README.zh-CN.md"><ins>简体中文</ins></a>
 </p>
 
