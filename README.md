@@ -1,116 +1,173 @@
-# DirectorX
+<h1 align="center">DirectorX</h1>
 
-DirectorX is a Director-led multi-agent system for long-form video editing. The Director Agent owns the brief, delegates bounded tasks, reviews specialist results, requests revisions, and approves project decisions. Specialists may consult one another when the communication policy allows it, but they cannot assign work or change project-level state.
+<p align="center">
+  English | <a href="README.zh-CN.md"><ins>简体中文</ins></a>
+</p>
 
-DirectorX is not modeled as a fixed pipeline. The order of work may change as the Director receives evidence, asks questions, or sends an artifact back for revision.
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11+"></a> <a href="https://langchain-ai.github.io/langgraph/"><img src="https://img.shields.io/badge/LangGraph-workflow-1C3C3C?style=flat-square" alt="LangGraph workflow"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-2ea44f?style=flat-square" alt="Apache 2.0 license"></a>
+</p>
+
+DirectorX is a director-led, multi-agent video editing tool for turning local footage and a creative brief into a polished, reviewable cut. It understands the footage, shapes the story, writes a storyboard and narration, matches each beat to the right source moment, selects background music, renders the video, and checks the result.
+
+## ⭐ Highlights
+
+- **Brief to final video**: Turn a creative brief and local footage into a structured, narrated edit.
+- **Evidence-backed footage understanding**: Detect shots, group scenes, read subtitles or speech, and make source moments searchable.
+- **Story-first editing**: Organize the source into a story hierarchy, then turn the selected direction into beat-level narration and visual intent.
+- **Matched visuals, voice, and music**: Connect every beat to a verified source interval, measured narration, and a semantically selected music track.
+- **Inspectable results**: Keep the storyboard, narration, grounding, sound plan, rendered video, and review report as readable project outputs.
+- **Easy to refine**: Use the intermediate results and review feedback to iterate toward a better cut.
 
 ## Agent roles
 
-| Role | Ownership |
+| Agent | Responsibility |
 | --- | --- |
-| Director Agent | Creative brief, delegation, revisions, decisions, and final approval |
-| Footage Analyst Agent | Source facts, scene understanding, and footage evidence |
+| Director Agent | Brief, delegation, decisions, and approval |
+| Footage Analyst Agent | Shot/scene understanding and searchable evidence |
 | Screenwriter Agent | Narrative structure and narration text |
-| Narration Agent | Voice delivery, timing, pronunciation, and subtitles |
-| Grounding Agent | Exact source clips that satisfy approved visual intent |
-| Sound Agent | Music selection, sound design, and mix intent |
-| Review Agent | Independent review of approved artifacts and issue reporting |
+| Narration Agent | Voice synthesis and timing measurement |
+| Grounding Agent | Exact source intervals for each beat |
+| Sound Agent | Whole-edit music selection and mix intent |
+| Render Agent | Deterministic FFmpeg assembly |
+| Review Agent | Independent review of the rendered video |
 
-The Director is the only formal authority. Direct specialist communication is limited to one scoped question and one response:
+## Core capabilities
 
-| Sender | May consult |
-| --- | --- |
-| Director | Every specialist |
-| Footage Analyst | Director |
-| Screenwriter | Footage Analyst, Director |
-| Narration | Screenwriter, Director |
-| Grounding | Footage Analyst, Screenwriter, Director |
-| Sound | Narration, Director |
-| Review | Director |
+DirectorX helps turn raw footage into a story that is ready to share. Give it a creative direction and it helps shape the narrative, find the moments that matter, build the voice track, choose a fitting soundtrack, and bring everything together into a polished cut that can be reviewed and refined.
 
-A consultation cannot assign a task, request a formal revision, mutate an artifact, or approve a decision. An unresolved question is returned to the Director.
+**Find the story in your footage.** Start with a clear brief instead of a timeline full of manual searching. DirectorX understands what is happening across your video, surfaces the scenes that matter, and gives the edit a coherent beginning, middle, and end.
 
-## Context model
+**Create a script with purpose.** Turn your direction into a storyboard with clear beats, meaningful narration, and a pace that keeps the audience moving through the story.
 
-The coordination layer keeps three explicit context scopes. `ProjectMemory` contains only the approved brief, global constraints, and approved artifact references; only the Director can write it. `TaskContext` contains the minimum input required by one assignee and is readable only by that assignee and the Director. `ConsultationRequest` and `ConsultationResponse` carry only the question, reason, required answer, and relevant artifact references; conversation histories are never copied between agents.
+**Put the right picture behind every word.** Each beat is matched with a source moment that supports its meaning, so the edit feels intentional rather than assembled from convenient clips.
 
-Tasks, results, consultations, and decisions are immutable files. A repeated identifier fails instead of overwriting prior state. Only Director-approved information enters project memory; transient discussion stays outside it.
+**Finish with sound and a cut you can improve.** A fitting soundtrack, balanced voice and music, and a final review bring the first version together and give the next revision a concrete starting point.
 
-`FootageAnalystAgent` detects shots, groups adjacent visually similar shots into scenes, selects keyframes, writes dense visual captions, adds normalized retrieval tags, and builds embeddings before returning a searchable `VideoIndex`. Scene grouping uses local CLIP image embeddings and a configurable similarity threshold; subtitles and ASR are used for scene metadata, not for the visual grouping decision. The VLM writes plain-text dense captions; one LLM call per scene combines those captions with subtitles or ASR transcripts and writes both an information-rich retrieval caption and a concise factual short summary, plus normalized labels, back to each scene. The tagger returns fixed-format text, which the application parses into its internal model. It does not write creative recommendations or project decisions. `ScreenwriterAgent` owns narrative structure and narration text, `NarrationAgent` owns voice delivery, `GroundingAgent` owns exact visual source intervals, and `SoundAgent` owns whole-edit background music selection. Subtitles, Rendering, sound effects, and general orchestration remain outside the current slices.
+Provider settings, model choices, and media paths are configured in [`config.toml`](config.toml).
 
-The current coordination path is intentionally narrow. `DirectorAgent` delegates a `TaskContext` to `FootageAnalystAgent`, waits for indexing to finish, and receives a `TaskResult` containing the generated `index.json`, `search.sqlite3`, and `story-summary.json` artifact references. Footage Analyst builds the story hierarchy with LLM-only passes over each scene's factual caption and normalized tags; it groups scenes into sequences and acts, keeps source-scene citations, and adds film/act/sequence nodes to the SQLite index for coarse-to-fine retrieval.
+## Quick start
 
-The Director can then delegate a Screenwriter task that explicitly references both `story-summary.json` and `index.json`. `ScreenwriterAgent` loads and validates those artifacts, asks its model to create an editing screenplay from the complete story hierarchy, expands only the screenplay's selected sequences into minimal scene evidence (`scene_id`, `short_summary`, `caption`, and `tags`), and makes a second model call for beat-level voice-over text. The agent validates and merges both outputs, atomically persists `storyboard.json`, and submits its own `TaskResult`; the Director only delegates, awaits, and reads that result.
+### Requirements
 
-A Narration task explicitly references the approved `storyboard.json`. `NarrationAgent` loads that artifact, synthesizes one WAV file per beat through the configured Edge voice, records both the Screenwriter's target duration and the measured audio duration, and atomically publishes `narration/narration.json` with the audio files. A timing difference is reported rather than treated as a failure. Invalid artifacts, unusable audio, TTS failures, and persistence failures produce a blocked result submitted by Narration itself.
+Use Python 3.11 or newer and install `ffmpeg` and `ffprobe` so both commands are available on `PATH`. A real run also needs one OpenAI-compatible VLM endpoint, one OpenAI-compatible LLM endpoint, and at least one `.mp3`, `.wav`, `.m4a`, `.aac`, or `.flac` file in `media/music/`. The first run may download CLIP, sentence-transformers, and CLAP checkpoints; Whisper is optional.
 
-A Grounding task explicitly references `index.json`, `search.sqlite3`, `story-summary.json`, `storyboard.json`, and `narration/narration.json`. `GroundingAgent` first combines the Screenwriter's cited scenes and sequences with hybrid index search, then sends only those candidate source windows to Qwen3-VL as timestamp-labeled frames. A second call inspects denser frames around the strongest interval to refine its boundaries. The agent validates every returned timestamp and frame citation, atomically publishes `grounding.json`, and submits its own result. The measured narration duration is retained as editing context; a shorter visually valid source interval is reported rather than rejected.
-
-A Sound task explicitly references `storyboard.json`, `narration/narration.json`, and the prebuilt `music-index.json`. Build or refresh that index when the music library changes with:
-
-```text
-.venv/bin/python -m directorx.cli.music_index --config config.toml
-```
-
-The indexer scans the configured music directory, samples each track at evenly spaced windows, encodes those windows once with the local `laion/larger_clap_music` checkpoint, averages and normalizes the vectors, and atomically persists track metadata, windows, vectors, model name, and vector dimension under the configured artifacts directory. Hugging Face downloads the approximately 780 MB CLAP checkpoint into its normal local cache on first use; weights are not copied into this repository. At task time, `SoundAgent` loads the validated index, encodes only the current storyboard query as text, and ranks the stored vectors, with filename-derived tags used only to break score ties. It selects exactly one track, records the complete edit duration and mix intent in `sound-plan.json`, and submits its own result. A short track is valid because rendering can loop it, while a long track can be trimmed. Missing or incompatible index inputs, model failures, and persistence failures produce a blocked result.
-
-A Review task references only the rendered video artifact. `ReviewAgent` extracts a small timestamped frame sample and makes one multimodal review call covering narrative completeness, flow, and obvious visible editing errors. It persists the validated decision as `review.json` and submits its own result; a clear defect is reported as blocked for the Director to decide on the next revision, while stylistic preferences do not block the edit.
-
-## Setup
-
-Requirements are Python 3.11 or newer and FFmpeg/ffprobe on `PATH`.
+### Install
 
 ```bash
+git clone https://github.com/savebees/DirectorX.git
+cd DirectorX
+
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
+.venv/bin/python -m pip install -r requirements.txt
+# Optional: install this when config.toml uses Whisper ASR.
+.venv/bin/python -m pip install -r requirements-asr.txt
 ```
 
-DirectorX reads API keys from the process environment and does not load `.env` automatically. Set `SILICONFLOW_API_KEY` for the Qwen3-VL captioner and Grounding VLM, and `VYCE_API_KEY` for the GPT-5.6 Luna scene tagger, story hierarchy model, and screenwriter model. Install `requirements-asr.txt` when using Whisper transcription.
+DirectorX reads credentials from environment variables and does not load `.env` by itself. Copy the example file, fill in both keys, and load it into your shell:
+
+```bash
+cp .env.example .env
+set -a
+source .env
+set +a
+```
+
+`VLM_API_KEY` is used by the default Qwen3-VL captioning, grounding, and review calls. `LLM_API_KEY` is used by the default scene tagger, story-structure, and screenwriter calls. Change the provider URLs, model names, or environment-variable names in `config.toml` when using another OpenAI-compatible service.
+
+### Prepare and run
+
+Put a source video in `media/videos/` and music files in `media/music/`. Before the first run, adjust the transcription section in `config.toml`: the checked-in example points to a sample subtitle path, so set `subtitle_path` to an existing sidecar, choose `provider = "embedded"` or `"whisper"`, or use `provider = "none"` when no transcript is available.
+
+Build the music index once, then run the workflow. The runner automatically discovers `artifacts/music-index.json` when `--music-index` is omitted:
+
+```bash
+.venv/bin/python -m directorx.cli.music_index --config config.toml
+
+.venv/bin/python -m directorx.cli.check \
+  --config config.toml \
+  --video media/videos/example.mp4
+
+.venv/bin/python -m directorx.cli.run \
+  --config config.toml \
+  --video media/videos/example.mp4 \
+  --brief "Explain the key relationship and turning point in this footage." \
+  --target-duration 60
+```
+
+Use `--brief-file` for a longer brief, `--constraint` more than once for editorial constraints, and `--project-id` to choose an explicit output directory. Project identifiers are immutable: use a new identifier for a new run instead of reusing a completed project.
+
+## Outputs
+
+For a project named `example`, the workflow writes the following durable artifacts:
+
+```text
+artifacts/
+  music-index.json
+  example/
+    story-summary.json
+    storyboard.json
+    narration/
+      narration.json
+      *.wav
+    grounding.json
+    sound-plan.json
+    final.mp4
+    review.json
+```
+
+The searchable footage cache lives under `.video-index/` and contains `index.json`, `search.sqlite3`, keyframes, and model checkpoints for each source filename. Coordination records and LangGraph checkpoints are stored separately so the manifests remain easy to inspect or move.
 
 ## Configuration
 
-[`config.toml`](config.toml) is the single configuration entry point for paths, indexing, scene grouping, transcription, embedding, VLM, LLM, TTS, grounding, sound, rendering, and edit defaults. Footage indexing uses PySceneDetect's AdaptiveDetector for shots, local CLIP image embeddings to merge adjacent shots into scenes, and duration-aware sharpness-based keyframes: candidates are sampled locally, divided across each shot timeline, and ranked by frame clarity before each scene sends at most eight images to the VLM. Grounding separately configures candidate count, source-window padding, coarse and refinement sampling rates, frame limits, and concurrency while reusing the configured Qwen3-VL endpoint. Sound configures the local CLAP model, device, audio-window sampling, and mix levels. Transcription defaults to `auto`: an available sidecar subtitle is preferred, then an embedded text subtitle track, then faster-whisper ASR. Provider names are validated; adding a provider requires an explicit adapter.
+`config.toml` is the single configuration entry point. The sections cover paths, shot detection and scene grouping, transcription, text and visual embeddings, VLM/LLM providers, Edge TTS, grounding sampling, music analysis, review frame limits, render dimensions, and target duration. The default render is 1920x1080 at 30 FPS; set `render.aspect` to `portrait` or `square` when needed.
 
-The standalone index command remains available while the Footage Analyst role is developed:
+Transcription with `provider = "auto"` tries the configured sidecar subtitle, then an embedded text track, then faster-whisper. Scene grouping uses local CLIP similarity; semantic search combines SQLite FTS5 with dense-vector reranking. Music indexing samples each track once, so refresh `music-index.json` after changing the library. The CLAP checkpoint is downloaded to the normal Hugging Face cache and is not copied into the repository.
+
+## Standalone indexing
+
+The footage indexer can be run without the full workflow. This is useful for inspecting scene extraction or warming the cache:
 
 ```bash
-SILICONFLOW_API_KEY='<secret>' \
-  .venv/bin/python -m directorx.cli.index \
+.venv/bin/python -m directorx.cli.index \
   --config config.toml \
-  --video media/videos/Casino.Royale.movie/Casino.Royale.2006.PROPER.1080p.BluRay.H264.AAC-LAMA.mp4
+  --video media/videos/example.mp4
 ```
 
-## Structure
+It prints the scene count and paths to the generated `index.json` and `search.sqlite3`.
+
+## Repository layout
 
 ```text
-directorx/
-  agents/         Director and specialist implementations
-  coordination/   roles, contracts, permissions, context storage, and runtime
-  core/           video-editing domain models and provider protocols
-  indexing/       shot detection, visual scene grouping, transcription, captions, tags, and search
-  rendering/      deterministic FFmpeg execution
-  services/       LLM, VLM, TTS, and media adapters
-  cli/            standalone operational commands
-media/
-  music/          local music inputs
-  videos/         local video and subtitle inputs
-artifacts/        generated project state and media outputs
-tests/            contract and capability tests
-config.toml       unified runtime configuration
+directorx/agents/         Director and specialist agents
+directorx/coordination/   Contracts, permissions, and context storage
+directorx/indexing/       Shot detection, captions, tags, and search
+directorx/rendering/      FFmpeg execution
+directorx/services/       LLM, VLM, TTS, and music adapters
+directorx/cli/            Operational commands
+tests/                    Contract and capability tests
 ```
 
 ## Development
 
 ```bash
-.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/ruff format --check .
 .venv/bin/ruff check .
-python3 -m pytest -q
+.venv/bin/python -m pytest -q
 ```
 
-The repository runs directly from its root. It is not a Python distribution and does not use a `dist/` build workflow.
+The repository runs directly from its root; it is not packaged into a `dist/` directory. Tests use fakes for providers and media engines, so a full test run does not require API keys or a real video.
 
-## 💗 Acknowledgement
+## 🩷 Acknowledgement
 
-DirectorX's scene-indexing field organization was informed by the separated visual, speech, label, object, and topic metadata exposed by [Google Cloud Video Intelligence](https://cloud.google.com/video-intelligence) and [Azure AI Video Indexer](https://learn.microsoft.com/azure/azure-video-indexer/). These projects helped shape the distinction between dense visual evidence and normalized retrieval tags.
+DirectorX's scene-indexing field organization was informed by the separated visual, speech, label, object, and topic metadata exposed by:
+
+- [Google Cloud Video Intelligence](https://cloud.google.com/video-intelligence)
+- [Azure AI Video Indexer](https://learn.microsoft.com/azure/azure-video-indexer/)
+
+Shot detection is provided by [PySceneDetect](https://www.scenedetect.com/). Music embeddings use the [LAION larger_clap_music](https://huggingface.co/laion/larger_clap_music) model.
+
+## License
+
+DirectorX is released under the [Apache License 2.0](LICENSE).
