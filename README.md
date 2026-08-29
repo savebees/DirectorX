@@ -1,4 +1,4 @@
-<h1 align="center">DirectorX</h1>
+<h1 align="center"><img src="assets/directorx-logo.png" alt="DirectorX logo" width="64" height="64" valign="middle"> DirectorX</h1>
 
 <p align="center">
   English | <a href="README.zh-CN.md"><ins>简体中文</ins></a>
