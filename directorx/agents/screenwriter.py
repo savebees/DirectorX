@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -60,6 +61,7 @@ class ScreenwriterAgent:
                 evidence_by_beat,
             )
         )
+        screenplay = self._rebalance_for_narration(screenplay, narration, story_summary)
         storyboard = self._merge_storyboard(screenplay, narration, evidence_by_beat)
         self._validate_storyboard(storyboard, target_duration_s)
         return storyboard
@@ -226,6 +228,89 @@ class ScreenwriterAgent:
         return evidence_by_beat
 
     @staticmethod
+    def _rebalance_for_narration(
+        screenplay: Screenplay,
+        narration: NarrationDraft,
+        story_summary: StorySummary,
+        breathing_room_s: float = 0.35,
+    ) -> Screenplay:
+        """Fit planning durations to the written story without rewriting its prose."""
+        narration_by_id = {beat.beat_id: beat.narration for beat in narration.beats}
+        if set(narration_by_id) != {beat.id for beat in screenplay.beats}:
+            return screenplay
+        weights = [
+            ScreenwriterAgent._spoken_units(narration_by_id[beat.id])
+            for beat in screenplay.beats
+        ]
+        available_s = screenplay.target_duration_s - breathing_room_s * len(weights)
+        if available_s <= 0:
+            return screenplay
+        weight_sum = sum(weights)
+        desired = [
+            breathing_room_s + available_s * weight / weight_sum for weight in weights
+        ]
+        sequence_durations = {
+            sequence.id: sequence.source_range.duration_s
+            for sequence in story_summary.sequences
+            if sequence.source_range is not None
+        }
+        capacities = [
+            (
+                sum(sequence_durations[item] for item in beat.source_sequence_ids)
+                if all(item in sequence_durations for item in beat.source_sequence_ids)
+                else float("inf")
+            )
+            for beat in screenplay.beats
+        ]
+        if screenplay.target_duration_s < 30:
+            capacities = [float("inf") for _ in screenplay.beats]
+        else:
+            capacities[-1] = min(capacities[-1], 8.0)
+        values = [
+            min(value, capacity)
+            for value, capacity in zip(desired, capacities, strict=True)
+        ]
+        remaining_s = screenplay.target_duration_s - sum(values)
+        while remaining_s > 1e-6:
+            active = [
+                index
+                for index, (value, capacity) in enumerate(
+                    zip(values, capacities, strict=True)
+                )
+                if capacity - value > 1e-6
+            ]
+            if not active:
+                raise ValueError(
+                    "Selected source sequences cannot fit narration timing"
+                )
+            total_room = sum(capacities[index] - values[index] for index in active)
+            applied_s = 0.0
+            for index in active:
+                room_s = capacities[index] - values[index]
+                change_s = min(room_s, remaining_s * room_s / total_room)
+                values[index] += change_s
+                applied_s += change_s
+            if applied_s <= 1e-9:
+                raise ValueError("Could not rebalance narration timing")
+            remaining_s -= applied_s
+        values[-1] += screenplay.target_duration_s - sum(values)
+        return screenplay.model_copy(
+            update={
+                "beats": [
+                    beat.model_copy(update={"target_duration_s": duration_s})
+                    for beat, duration_s in zip(screenplay.beats, values, strict=True)
+                ]
+            }
+        )
+
+    @staticmethod
+    def _spoken_units(text: str) -> int:
+        han = len(re.findall(r"[\u4e00-\u9fff]", text))
+        if han:
+            return han
+        return max(1, len(re.findall(r"\b\w+\b", text)))
+
+    @staticmethod
     def _merge_storyboard(
         screenplay: Screenplay,
         narration: NarrationDraft,
@@ -280,6 +365,7 @@ class ScreenwriterAgent:
             title=screenplay.title,
             logline=screenplay.logline,
             narrative_angle=screenplay.narrative_angle,
+            full_narration=narration.full_narration,
             beats=beats,
             target_duration_s=screenplay.target_duration_s,
         )
@@ -292,6 +378,12 @@ class ScreenwriterAgent:
         )
         if not storyboard.beats:
             raise ValueError("Screenwriter agent returned no storyboard beats")
+        if storyboard.full_narration:
+            joined = "".join(beat.narration for beat in storyboard.beats)
+            if "".join(joined.split()) != "".join(storyboard.full_narration.split()):
+                raise ValueError(
+                    "Storyboard full narration must match its ordered beat passages"
+                )
         ScreenwriterAgent._validate_duration(
             storyboard.target_duration_s,
             [beat.target_duration_s for beat in storyboard.beats],

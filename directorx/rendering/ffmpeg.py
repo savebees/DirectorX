@@ -56,12 +56,21 @@ class FFmpegRenderer:
         video_labels: list[str] = []
         for idx, clip in enumerate(plan.clips):
             label = f"v{idx}"
+            source_duration = clip.source_range.duration_s
+            pad_duration = max(0.0, clip.target_duration_s - source_duration)
+            padding = (
+                f",tpad=stop_mode=clone:stop_duration={pad_duration:.6f}"
+                if pad_duration > 1e-6
+                else ""
+            )
             filters.append(
                 f"[0:v]trim=start={clip.source_range.start_s:.6f}:"
                 f"end={clip.source_range.end_s:.6f},setpts=PTS-STARTPTS,"
                 f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,"
                 f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,"
-                f"fps={self.fps},format=yuv420p[{label}]"
+                f"fps={self.fps}{padding},"
+                f"trim=duration={clip.target_duration_s:.6f},setpts=PTS-STARTPTS,"
+                f"format=yuv420p[{label}]"
             )
             video_labels.append(f"[{label}]")
         filters.append(
@@ -73,18 +82,32 @@ class FFmpegRenderer:
             filters.append(
                 "[vout]subtitles=filename='"
                 + subtitle_file
-                + "':force_style='FontSize=26,Outline=2,Alignment=2,MarginV=90'[vsub]"
+                + "':force_style='FontName=Hiragino Sans GB,FontSize=22,"
+                "Outline=2,Shadow=0,Alignment=2,MarginV=55'[vsub]"
             )
             video_map = "[vsub]"
         else:
             video_map = "[vout]"
 
         narration_labels: list[str] = []
-        for idx, narration in enumerate(plan.narration, start=1):
+        for idx, (narration, beat) in enumerate(
+            zip(plan.narration, plan.beats, strict=True),
+            start=1,
+        ):
             label = f"n{idx - 1}"
+            silence_duration = max(
+                0.0,
+                beat.duration_s - narration.duration_s,
+            )
+            padding = (
+                f",apad=pad_dur={silence_duration:.6f}"
+                if silence_duration > 1e-6
+                else ""
+            )
             filters.append(
                 f"[{idx}:a]aresample=48000,atrim=duration={narration.duration_s:.6f},"
-                f"asetpts=PTS-STARTPTS[{label}]"
+                f"asetpts=PTS-STARTPTS{padding},"
+                f"atrim=duration={beat.duration_s:.6f}[{label}]"
             )
             narration_labels.append(f"[{label}]")
         filters.append(

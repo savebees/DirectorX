@@ -88,6 +88,8 @@ def test_story_structure_sends_only_scene_caption_and_tags() -> None:
     assert "objects=" not in evidence
     assert "1.0-9.0" not in evidence
     assert "captions and tags" in completions.calls[0]["messages"][0]["content"]
+    final_context = completions.calls[-1]["messages"][1]["content"]
+    assert "scenes=scene-00001" in final_context
     assert summary.sequences[0].id == "sequence-0001"
     assert summary.acts[0].id == "act-0001"
 
@@ -112,8 +114,117 @@ def test_story_structure_honors_configured_chunk_size() -> None:
         )
     )
 
-    assert len(completions.calls) == 3
+    # Two scene chunks, then one sequence-to-act pass and one act-to-film pass.
+    assert len(completions.calls) == 4
     assert [sequence.id for sequence in summary.sequences] == [
         "sequence-0001",
         "sequence-0002",
     ]
+
+
+class OutOfOrderStoryStructureCompletions(StoryStructureCompletions):
+    async def create(self, **kwargs):
+        user_content = kwargs["messages"][1]["content"]
+        if user_content.startswith("Scene evidence chunk"):
+            self.calls.append(kwargs)
+            scene_ids = list(dict.fromkeys(re.findall(r"scene-\d+", user_content)))
+            payload = {
+                "sequences": [
+                    {
+                        "title": "Intercut thread A",
+                        "short_summary": "The first visual thread develops.",
+                        "scene_ids": scene_ids[::2],
+                    },
+                    {
+                        "title": "Intercut thread B",
+                        "short_summary": "The second visual thread develops.",
+                        "scene_ids": scene_ids[1::2],
+                    },
+                ]
+            }
+            message = SimpleNamespace(content=json.dumps(payload))
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        return await super().create(**kwargs)
+
+
+def test_story_structure_normalizes_complete_out_of_order_scene_groups() -> None:
+    completions = OutOfOrderStoryStructureCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    model = OpenAICompatibleStoryStructureModel(client=client, max_scenes_per_chunk=4)
+    scenes = [
+        Scene(
+            id=f"scene-{number:05d}",
+            source_range=TimeRange(start_s=number, end_s=number + 1),
+            caption=f"Scene {number}",
+            tags=[f"tag-{number}"],
+        )
+        for number in range(4)
+    ]
+
+    summary = asyncio.run(
+        model.build(
+            VideoIndex(video_path=Path("movie.mp4"), duration_s=4, scenes=scenes)
+        )
+    )
+
+    assert [
+        scene_id for sequence in summary.sequences for scene_id in sequence.scene_ids
+    ] == [scene.id for scene in scenes]
+    assert all(
+        sequence.scene_ids == sorted(sequence.scene_ids)
+        for sequence in summary.sequences
+    )
+
+
+class OutOfOrderActCompletions(StoryStructureCompletions):
+    async def create(self, **kwargs):
+        user_content = kwargs["messages"][1]["content"]
+        if user_content.startswith("Sequence summaries"):
+            self.calls.append(kwargs)
+            sequence_ids = list(
+                dict.fromkeys(re.findall(r"sequence-\d+", user_content))
+            )
+            payload = {
+                "title": "The Door",
+                "short_summary": "Two intercut threads remain chronological.",
+                "acts": [
+                    {
+                        "title": "Thread A",
+                        "short_summary": "The first thread develops.",
+                        "sequence_ids": sequence_ids[::2],
+                    },
+                    {
+                        "title": "Thread B",
+                        "short_summary": "The second thread develops.",
+                        "sequence_ids": sequence_ids[1::2],
+                    },
+                ],
+            }
+            message = SimpleNamespace(content=json.dumps(payload))
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        return await super().create(**kwargs)
+
+
+def test_story_structure_normalizes_complete_out_of_order_act_groups() -> None:
+    completions = OutOfOrderActCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    model = OpenAICompatibleStoryStructureModel(client=client, max_scenes_per_chunk=1)
+    scenes = [
+        Scene(
+            id=f"scene-{number:05d}",
+            source_range=TimeRange(start_s=number, end_s=number + 1),
+            caption=f"Scene {number}",
+            tags=[f"tag-{number}"],
+        )
+        for number in range(4)
+    ]
+
+    summary = asyncio.run(
+        model.build(
+            VideoIndex(video_path=Path("movie.mp4"), duration_s=4, scenes=scenes)
+        )
+    )
+
+    assert [
+        sequence_id for act in summary.acts for sequence_id in act.sequence_ids
+    ] == [sequence.id for sequence in summary.sequences]

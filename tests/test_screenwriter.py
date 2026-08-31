@@ -1,9 +1,9 @@
 import asyncio
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from directorx.agents import DirectorAgent, FootageAnalystAgent, ScreenwriterAgent
 from directorx.coordination import (
@@ -203,6 +203,291 @@ def _narration() -> NarrationDraft:
             )
         ]
     )
+
+
+def test_screenplay_beat_accepts_up_to_three_source_sequences() -> None:
+    beat = ScreenplayBeat(
+        id="beat-1",
+        purpose="Escalate the confrontation",
+        story_content="Three consecutive events form one passage.",
+        visual_intent="Use multiple verified shots.",
+        mood="tense",
+        target_duration_s=10,
+        source_sequence_ids=[
+            "sequence-0001",
+            "sequence-0002",
+            "sequence-0003",
+        ],
+    )
+    assert len(beat.source_sequence_ids) == 3
+    with pytest.raises(ValidationError):
+        ScreenplayBeat(
+            id="beat-1",
+            purpose="Escalate the confrontation",
+            story_content="Two distant events are combined.",
+            visual_intent="Show both distant events as one clip.",
+            mood="tense",
+            target_duration_s=10,
+            source_sequence_ids=[
+                "sequence-0001",
+                "sequence-0002",
+                "sequence-0003",
+                "sequence-0004",
+            ],
+        )
+    with pytest.raises(ValidationError):
+        Screenplay.model_validate({**_screenplay().model_dump(), "title": ""})
+
+
+def test_screenplay_plan_requires_unique_source_chronology(tmp_path: Path) -> None:
+    _, _, summary = _source_artifacts(tmp_path)
+    first = (
+        _screenplay()
+        .beats[0]
+        .model_copy(
+            update={
+                "id": "beat-1",
+                "source_sequence_ids": ["sequence-0002"],
+                "target_duration_s": 6,
+            }
+        )
+    )
+    second = first.model_copy(
+        update={"id": "beat-2", "source_sequence_ids": ["sequence-0001"]}
+    )
+    screenplay = _screenplay().model_copy(update={"beats": [first, second]})
+
+    OpenAICompatibleScreenwriterModel._validate_screenplay_plan(screenplay, summary, 12)
+    normalized = OpenAICompatibleScreenwriterModel._normalize_screenplay_chronology(
+        screenplay, summary
+    )
+    assert [beat.source_sequence_ids for beat in normalized.beats] == [
+        ["sequence-0001"],
+        ["sequence-0002"],
+    ]
+    assert [beat.id for beat in normalized.beats] == ["beat-01", "beat-02"]
+
+    repeated = screenplay.model_copy(
+        update={
+            "beats": [
+                first,
+                second.model_copy(update={"source_sequence_ids": ["sequence-0002"]}),
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="must not reuse"):
+        OpenAICompatibleScreenwriterModel._validate_screenplay_plan(
+            repeated, summary, 12
+        )
+
+
+def test_screenplay_preparation_fills_a_small_sequence_gap(tmp_path: Path) -> None:
+    _, _, summary = _source_artifacts(tmp_path)
+    middle = StorySequence(
+        id="sequence-middle",
+        title="Transition",
+        short_summary="The traveler crosses the dark platform.",
+        scene_ids=["scene-0002"],
+    )
+    summary = summary.model_copy(
+        update={"sequences": [summary.sequences[0], middle, summary.sequences[1]]}
+    )
+    beat = (
+        _screenplay()
+        .beats[0]
+        .model_copy(
+            update={
+                "source_sequence_ids": ["sequence-0001", "sequence-0002"],
+            }
+        )
+    )
+    screenplay = _screenplay().model_copy(update={"beats": [beat]})
+
+    OpenAICompatibleScreenwriterModel._prepare_and_validate_screenplay(
+        screenplay,
+        summary,
+        12,
+    )
+
+    assert screenplay.beats[0].source_sequence_ids == [
+        "sequence-0001",
+        "sequence-middle",
+        "sequence-0002",
+    ]
+
+    credit_summary = summary.model_copy(
+        update={
+            "sequences": [
+                summary.sequences[0],
+                summary.sequences[2].model_copy(
+                    update={
+                        "short_summary": (
+                            "A cast and crew credit montage fills the screen."
+                        )
+                    }
+                ),
+            ]
+        }
+    )
+    noncredit_beat = (
+        _screenplay()
+        .beats[0]
+        .model_copy(
+            update={
+                "id": "beat-1",
+                "source_sequence_ids": ["sequence-0001"],
+                "target_duration_s": 6,
+            }
+        )
+    )
+    credit_beat = noncredit_beat.model_copy(
+        update={
+            "id": "beat-2",
+            "source_sequence_ids": ["sequence-0002"],
+        }
+    )
+    credit_plan = _screenplay().model_copy(
+        update={"beats": [noncredit_beat, credit_beat]}
+    )
+    filtered = OpenAICompatibleScreenwriterModel._apply_explicit_exclusions(
+        credit_plan,
+        credit_summary,
+        ["Exclude all subsequent cast and crew credit montage."],
+    )
+    assert [beat.source_sequence_ids for beat in filtered.beats] == [["sequence-0001"]]
+    assert filtered.beats[0].target_duration_s == 12
+    assert filtered.beats[0].id == "beat-01"
+
+
+def test_screenplay_preparation_splits_distant_sequence_groups() -> None:
+    sequences = [
+        StorySequence(
+            id=f"sequence-{index:04d}",
+            title=f"Sequence {index}",
+            short_summary=f"Event {index}",
+            scene_ids=[f"scene-{index:04d}"],
+        )
+        for index in range(1, 6)
+    ]
+    summary = StorySummary(
+        title="Test",
+        short_summary="A five-part story.",
+        sequences=sequences,
+        acts=[],
+    )
+    beat = (
+        _screenplay()
+        .beats[0]
+        .model_copy(update={"source_sequence_ids": ["sequence-0001", "sequence-0005"]})
+    )
+    screenplay = _screenplay().model_copy(update={"beats": [beat]})
+
+    OpenAICompatibleScreenwriterModel._prepare_and_validate_screenplay(
+        screenplay,
+        summary,
+        12,
+    )
+
+    assert [beat.source_sequence_ids for beat in screenplay.beats] == [
+        ["sequence-0001"],
+        ["sequence-0005"],
+    ]
+    assert [beat.target_duration_s for beat in screenplay.beats] == [6, 6]
+    assert [beat.id for beat in screenplay.beats] == ["beat-01", "beat-02"]
+
+
+def test_screenplay_preparation_keeps_seven_coherent_beats() -> None:
+    sequences = [
+        StorySequence(
+            id=f"sequence-{index:04d}",
+            title=f"Sequence {index}",
+            short_summary=f"Event {index}",
+            scene_ids=[f"scene-{index:04d}"],
+        )
+        for index in range(1, 17)
+    ]
+    summary = StorySummary(
+        title="Test",
+        short_summary="A long story.",
+        sequences=sequences,
+        acts=[],
+    )
+    base = _screenplay().beats[0]
+    beats = [
+        base.model_copy(
+            update={
+                "id": f"beat-{index:02d}",
+                "target_duration_s": 60 / 7,
+                "source_sequence_ids": [
+                    f"sequence-{index * 2 - 1:04d}",
+                    f"sequence-{index * 2:04d}",
+                ],
+            }
+        )
+        for index in range(1, 7)
+    ]
+    beats.append(
+        base.model_copy(
+            update={
+                "id": "beat-07",
+                "target_duration_s": 60 - sum(beat.target_duration_s for beat in beats),
+                "source_sequence_ids": ["sequence-0013", "sequence-0016"],
+            }
+        )
+    )
+    screenplay = _screenplay().model_copy(
+        update={"beats": beats, "target_duration_s": 60}
+    )
+
+    OpenAICompatibleScreenwriterModel._prepare_and_validate_screenplay(
+        screenplay,
+        summary,
+        60,
+    )
+
+    assert len(screenplay.beats) == 7
+    assert screenplay.beats[-1].source_sequence_ids == ["sequence-0016"]
+
+
+def test_screenplay_preparation_normalizes_model_duration_math() -> None:
+    summary = StorySummary(
+        title="Test",
+        short_summary="A story.",
+        sequences=[
+            StorySequence(
+                id="sequence-0001",
+                title="Sequence",
+                short_summary="A long event.",
+                scene_ids=["scene-0001"],
+                source_range=TimeRange(start_s=0, end_s=20),
+            )
+        ],
+        acts=[],
+    )
+    screenplay = _screenplay().model_copy(
+        update={
+            "beats": [
+                _screenplay()
+                .beats[0]
+                .model_copy(
+                    update={
+                        "target_duration_s": 10,
+                        "source_sequence_ids": ["sequence-0001"],
+                    }
+                )
+            ],
+            "target_duration_s": 10,
+        }
+    )
+
+    OpenAICompatibleScreenwriterModel._prepare_and_validate_screenplay(
+        screenplay,
+        summary,
+        12,
+    )
+
+    assert screenplay.target_duration_s == 12
+    assert screenplay.beats[0].target_duration_s == 12
 
 
 def test_director_delegates_and_screenwriter_uses_both_artifacts(
@@ -449,27 +734,127 @@ def test_openai_screenwriter_uses_role_prompts_and_minimal_scene_evidence() -> N
     assert screenplay == _screenplay()
     assert narration == _narration()
     assert len(completions.calls) == 2
-    assert (
-        completions.calls[0]["messages"][0]["content"]
-        == OpenAICompatibleScreenwriterModel.SCREENPLAY_SYSTEM_PROMPT
+    assert completions.calls[0]["messages"][0]["content"].startswith(
+        OpenAICompatibleScreenwriterModel.SCREENPLAY_SYSTEM_PROMPT
     )
+    screenplay_prompt = completions.calls[0]["messages"][0]["content"]
+    assert "1 to 3 consecutive source_sequence_ids" in screenplay_prompt
+    assert "absent footage" in screenplay_prompt
     planning_request = completions.calls[0]["messages"][1]["content"]
-    assert "Complete source story hierarchy" in planning_request
+    assert "Film title" in planning_request
     assert summary.title in planning_request
     assert "sequence-0002" in planning_request
     assert "For every beat" not in planning_request
     assert "Write the editing screenplay" not in planning_request
 
-    assert (
-        completions.calls[1]["messages"][0]["content"]
-        == OpenAICompatibleScreenwriterModel.NARRATION_SYSTEM_PROMPT
+    assert completions.calls[1]["messages"][0]["content"].startswith(
+        OpenAICompatibleScreenwriterModel.NARRATION_SYSTEM_PROMPT
     )
     narration_request = completions.calls[1]["messages"][1]["content"]
     evidence_payload = narration_request.split(
         "Selected source scene evidence by beat:\n", maxsplit=1
-    )[1].split("\n\nWrite one narration", maxsplit=1)[0]
-    parsed_evidence = json.loads(evidence_payload)
-    assert parsed_evidence == {"beat-1": [evidence.model_dump(mode="json")]}
+    )[1].split("\n\nFirst write", maxsplit=1)[0]
+    assert "beat-1:" in evidence_payload
+    assert evidence.scene_id in evidence_payload
+    assert evidence.caption in evidence_payload
     assert "transcript" not in evidence_payload
     assert "dense_caption" not in evidence_payload
     assert "source_range" not in evidence_payload
+
+
+def test_chinese_narration_derives_one_canonical_full_script() -> None:
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace()))
+    model = OpenAICompatibleScreenwriterModel(
+        client=client,
+        narration_language="zh-CN",
+    )
+    base = _screenplay().beats[0]
+    screenplay = _screenplay().model_copy(
+        update={
+            "beats": [
+                base.model_copy(
+                    update={"id": f"beat-{index:02d}", "target_duration_s": 15}
+                )
+                for index in range(1, 5)
+            ],
+            "target_duration_s": 60,
+        }
+    )
+    passage = "风雪笼罩城市，他沿着隐秘线索进入大楼，沉默中的对峙逐渐揭开一场危险背叛。"
+    parts = [passage for _ in range(4)]
+    draft = NarrationDraft(
+        full_narration="".join(parts),
+        beats=[
+            BeatNarration(
+                beat_id=f"beat-{index:02d}",
+                narration=text,
+                evidence_scene_ids=["scene-0003"],
+            )
+            for index, text in enumerate(parts, 1)
+        ],
+    )
+
+    model._validate_narration(draft, screenplay)
+    mismatched = draft.model_copy(
+        update={"full_narration": draft.full_narration + "尾声"}
+    )
+    model._validate_narration(mismatched, screenplay)
+    assert mismatched.full_narration == "".join(parts)
+
+
+def test_screenwriter_rebalances_beat_timing_for_finished_narration() -> None:
+    screenplay = Screenplay(
+        title="Rebalanced",
+        logline="A continuous story.",
+        narrative_angle="Build and resolve tension.",
+        beats=[
+            ScreenplayBeat(
+                id=f"beat-{index:02d}",
+                purpose="Advance the story",
+                story_content="A grounded event.",
+                visual_intent="Use the selected source passage.",
+                mood="tense",
+                target_duration_s=15,
+                source_sequence_ids=[f"sequence-{index:04d}"],
+            )
+            for index in range(1, 5)
+        ],
+        target_duration_s=60,
+    )
+    passages = [
+        "短句",
+        "这一段旁白明显更长需要更多画面时间来完整讲述",
+        "转折发生",
+        "身份揭晓",
+    ]
+    narration = NarrationDraft(
+        beats=[
+            BeatNarration(
+                beat_id=f"beat-{index:02d}",
+                narration=text,
+                evidence_scene_ids=[f"scene-{index:04d}"],
+            )
+            for index, text in enumerate(passages, 1)
+        ]
+    )
+    summary = StorySummary(
+        title="Source",
+        short_summary="A story.",
+        sequences=[
+            StorySequence(
+                id=f"sequence-{index:04d}",
+                title="Passage",
+                short_summary="A grounded passage.",
+                scene_ids=[f"scene-{index:04d}"],
+                source_range=TimeRange(start_s=(index - 1) * 30, end_s=index * 30),
+            )
+            for index in range(1, 5)
+        ],
+        acts=[],
+    )
+
+    fitted = ScreenwriterAgent._rebalance_for_narration(screenplay, narration, summary)
+
+    assert sum(beat.target_duration_s for beat in fitted.beats) == pytest.approx(60)
+    assert fitted.beats[1].target_duration_s > 15
+    assert fitted.beats[-1].target_duration_s <= 8

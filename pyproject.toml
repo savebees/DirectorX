@@ -8,3 +8,23 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[project]
+name = "directorx"
+version = "0.1.0"
+description = "Director-led multi-agent video editing workflow"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.10,<3",
+    "edge-tts>=7,<8",
+    "openai>=2.24,<3",
+    "numpy>=1.26,<2",
+    "pillow>=10,<13",
+    "scenedetect[opencv]>=0.6.7,<0.7",
+    "opencv-python>=4.8,<4.12",
+    "sentence-transformers>=3.3,<6",
+    "torch>=2.2,<3",
+    "transformers>=4.49,<6",
+    "langgraph>=1.2,<2",
+    "langgraph-checkpoint-sqlite>=3,<4",
+]

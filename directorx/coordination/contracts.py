@@ -18,6 +18,8 @@ class AgentRole(StrEnum):
     NARRATION = "narration"
     GROUNDING = "grounding"
     SOUND = "sound"
+    EDITOR = "editor"
+    RENDER = "render"
     REVIEW = "review"
 
 

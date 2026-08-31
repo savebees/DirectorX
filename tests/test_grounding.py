@@ -8,7 +8,12 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from directorx.agents import DirectorAgent, FootageAnalystAgent, GroundingAgent
+from directorx.agents import (
+    DirectorAgent,
+    FootageAnalystAgent,
+    GroundingAgent,
+    GroundingBatchProcessor,
+)
 from directorx.agents.grounding import SceneRetriever
 from directorx.coordination import (
     AgentRole,
@@ -18,6 +23,7 @@ from directorx.coordination import (
     TaskResult,
 )
 from directorx.core.models import (
+    GroundedClip,
     GroundingCandidate,
     GroundingDecision,
     GroundingFrame,
@@ -261,6 +267,83 @@ def test_scene_retriever_combines_screenwriter_evidence_and_hybrid_search(
     }
 
 
+def test_grounding_batch_keeps_verified_sibling_shots(tmp_path: Path) -> None:
+    shots = [
+        ShotRequest(
+            id=f"shot-beat-1-{index}",
+            beat_id="beat-1",
+            narration_text="A continuous line.",
+            story_content="One story passage.",
+            visual_query="A verified moment.",
+            mood="tense",
+            target_duration_s=4,
+            source_sequence_ids=[f"sequence-{index}"],
+            evidence_scene_ids=[f"scene-{index}"],
+        )
+        for index in range(1, 3)
+    ]
+
+    class PartialAgent:
+        async def run(self, shot, index, story_summary, work_dir):
+            if shot.id.endswith("-1"):
+                raise ValueError("no visual match")
+            return GroundedClip(
+                shot_id=shot.id,
+                beat_id=shot.beat_id,
+                source_scene_ids=["scene-2"],
+                source_range=TimeRange(start_s=4, end_s=8),
+                target_duration_s=4,
+                confidence=0.9,
+                evidence_frame_ids=["frame-2"],
+                evidence_timestamps_s=[5],
+                rationale="Verified.",
+            )
+
+    clips = asyncio.run(
+        GroundingBatchProcessor(PartialAgent(), max_parallel=2).run(
+            shots,
+            SimpleNamespace(),
+            SimpleNamespace(),
+            tmp_path,
+        )
+    )
+
+    assert [clip.shot_id for clip in clips] == ["shot-beat-1-2"]
+
+
+def test_grounding_batch_merges_overlapping_verified_shots() -> None:
+    first = GroundedClip(
+        shot_id="shot-1",
+        beat_id="beat-1",
+        source_scene_ids=["scene-1"],
+        source_range=TimeRange(start_s=5, end_s=9),
+        target_duration_s=4,
+        confidence=0.9,
+        evidence_frame_ids=["frame-1"],
+        evidence_timestamps_s=[6],
+        rationale="First match.",
+    )
+    second = first.model_copy(
+        update={
+            "shot_id": "shot-2",
+            "source_scene_ids": ["scene-2"],
+            "source_range": TimeRange(start_s=8, end_s=12),
+            "confidence": 0.8,
+            "evidence_frame_ids": ["frame-2"],
+            "evidence_timestamps_s": [10],
+            "rationale": "Second match.",
+        }
+    )
+
+    merged = GroundingBatchProcessor._merge_overlapping([second, first])
+
+    assert len(merged) == 1
+    assert merged[0].source_range == TimeRange(start_s=5, end_s=12)
+    assert merged[0].source_scene_ids == ["scene-1", "scene-2"]
+    assert merged[0].evidence_frame_ids == ["frame-1", "frame-2"]
+    assert merged[0].confidence == 0.8
+
+
 def test_director_delegates_grounding_and_agent_persists_its_result(
     tmp_path: Path,
 ) -> None:
@@ -288,10 +371,10 @@ def test_director_delegates_grounding_and_agent_persists_its_result(
     ]
     assert manifest.source_video == tmp_path / "movie.mp4"
     assert manifest.target_duration_s == 12
-    assert manifest.source_duration_s == 2
-    assert manifest.clips[0].source_range == TimeRange(start_s=12.5, end_s=14.5)
+    assert manifest.source_duration_s == 11
+    assert manifest.clips[0].source_range == TimeRange(start_s=9, end_s=20)
     assert manifest.clips[0].target_duration_s == 12
-    assert manifest.clips[0].source_scene_ids == ["scene-0002"]
+    assert manifest.clips[0].source_scene_ids == ["scene-0001", "scene-0002"]
     assert len(manifest.clips[0].evidence_timestamps_s) == 2
     assert [call[0] for call in model.calls] == ["locate", "locate", "refine"]
     assert model.calls[0][1].target_duration_s == 12
@@ -349,6 +432,28 @@ def test_grounding_blocks_when_required_artifact_cannot_load(tmp_path: Path) -> 
 
     assert result.status == "blocked"
     assert runtime.read_result(AgentRole.DIRECTOR, task.task_id) == result
+
+
+def test_grounding_can_run_without_narration_manifest_for_parallelism(
+    tmp_path: Path,
+) -> None:
+    paths = _source_artifacts(tmp_path)
+    task = _task(paths, "grounding-parallel")
+    task = task.model_copy(
+        update={
+            "input_artifacts": [
+                artifact
+                for artifact in task.input_artifacts
+                if artifact.name != "narration-manifest"
+            ]
+        }
+    )
+    runtime = CoordinationRuntime(tmp_path / "coordination")
+    runtime.delegate(AgentRole.DIRECTOR, task)
+
+    result = asyncio.run(_agent().run_task(task, runtime, tmp_path / "artifacts"))
+
+    assert result.status == "completed"
 
 
 def test_grounding_does_not_overwrite_existing_manifest(tmp_path: Path) -> None:
@@ -464,18 +569,65 @@ def test_qwen_grounding_vlm_uses_timestamped_frames_and_role_prompts(
     assert all(
         call["model"] == "Qwen/Qwen3-VL-8B-Instruct" for call in completions.calls
     )
-    assert (
-        completions.calls[0]["messages"][0]["content"]
-        == OpenAICompatibleGroundingModel.LOCATE_SYSTEM_PROMPT
+    assert completions.calls[0]["messages"][0]["content"].startswith(
+        OpenAICompatibleGroundingModel.LOCATE_SYSTEM_PROMPT
     )
-    assert (
-        completions.calls[1]["messages"][0]["content"]
-        == OpenAICompatibleGroundingModel.REFINE_SYSTEM_PROMPT
+    assert completions.calls[1]["messages"][0]["content"].startswith(
+        OpenAICompatibleGroundingModel.REFINE_SYSTEM_PROMPT
     )
     user_content = completions.calls[0]["messages"][1]["content"]
-    assert "frame-1=12.000s" in user_content[0]["text"]
+    assert "frame-1=12.000000s" in user_content[0]["text"]
     assert user_content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
-    assert completions.calls[0]["response_format"]["type"] == "json_schema"
+    assert completions.calls[0]["response_format"] == {"type": "json_object"}
+
+
+def test_qwen_grounding_clamps_only_serialization_rounding_at_candidate_edges(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "frame.jpg"
+    Image.new("RGB", (20, 12), "black").save(image_path, format="JPEG")
+    frames = [GroundingFrame(id="frame-1", timestamp_s=10.25, path=image_path)]
+    candidate = GroundingCandidate(
+        id="candidate-0001",
+        anchor_scene_id="scene-0002",
+        scene_ids=["scene-0002"],
+        source_range=TimeRange(start_s=10.0004, end_s=20.0004),
+        retrieval_score=1,
+    )
+    shot = ShotRequest(
+        id="shot-beat-1",
+        beat_id="beat-1",
+        narration_text="Then every light went out.",
+        story_content="The station falls into darkness.",
+        visual_query="A station falling into darkness",
+        mood="tense",
+        target_duration_s=12,
+        source_sequence_ids=["sequence-0001"],
+        evidence_scene_ids=["scene-0002"],
+    )
+    response = GroundingDecision(
+        matched=True,
+        source_range=TimeRange(start_s=10.0, end_s=20.001),
+        confidence=0.8,
+        evidence_frame_ids=["frame-1"],
+        rationale="The labeled frame supports the requested moment.",
+    )
+    completions = SimpleNamespace(
+        create=lambda **kwargs: None,
+    )
+
+    async def create(**kwargs):
+        message = SimpleNamespace(content=response.model_dump_json(), refusal=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    completions.create = create
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    decision = asyncio.run(
+        OpenAICompatibleGroundingModel(client=client).locate(shot, candidate, frames)
+    )
+
+    assert decision.source_range == candidate.source_range
 
 
 def test_ffmpeg_grounding_extractor_labels_exact_timestamps(

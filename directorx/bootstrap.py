@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
+from directorx.agents.director import DirectorAgent
+from directorx.agents.editor import EditorAgent
+from directorx.agents.footage import FootageAnalystAgent
 from directorx.agents.grounding import GroundingAgent, SceneRetriever
 from directorx.agents.narration import NarrationAgent
+from directorx.agents.render import RenderAgent
 from directorx.agents.review import ReviewAgent
+from directorx.agents.screenwriter import ScreenwriterAgent
 from directorx.agents.sound import SoundAgent
 from directorx.config import AppConfig
+from directorx.coordination import CoordinationRuntime
 from directorx.core.ports import EmbeddingProvider, Transcriber
 from directorx.indexing import (
     AutoTranscriber,
@@ -23,6 +30,7 @@ from directorx.indexing import (
     SidecarSubtitleTranscriber,
     VisualSceneGrouper,
 )
+from directorx.rendering.ffmpeg import FFmpegRenderer
 from directorx.services.grounding import (
     FFmpegGroundingFrameExtractor,
     OpenAICompatibleGroundingModel,
@@ -31,6 +39,7 @@ from directorx.services.providers import (
     DirectoryMusicLibrary,
     EdgeSpeechTTS,
     OpenAICompatibleSceneTagger,
+    OpenAICompatibleScreenwriterModel,
     OpenAICompatibleStoryStructureModel,
 )
 from directorx.services.review import (
@@ -52,12 +61,82 @@ class IndexingRuntime:
     indexer: HybridVideoIndexer
 
 
+def create_director(
+    config: AppConfig,
+    *,
+    coordination_dir: Path | None = None,
+) -> DirectorAgent:
+    """Build the complete Director and specialist runtime from config."""
+    artifacts_dir = config.resolve(config.paths.artifacts_dir)
+    indexing = create_indexing_runtime(config)
+    runtime = CoordinationRuntime(
+        coordination_dir or artifacts_dir.parent / "coordination"
+    )
+    llm = config.llm
+    screenwriter = ScreenwriterAgent(
+        OpenAICompatibleScreenwriterModel(
+            model=llm.screenwriter_model,
+            base_url=llm.base_url,
+            api_key_env=llm.api_key_env,
+            max_tokens=llm.screenwriter_max_tokens,
+            timeout_s=llm.timeout_s,
+            max_retries=llm.retries,
+            fallback_model=llm.screenwriter_fallback_model,
+            fallback_base_url=llm.screenwriter_fallback_base_url,
+            fallback_api_key_env=llm.screenwriter_fallback_api_key_env,
+            structured_output_mode=llm.structured_output_mode,
+            fallback_structured_output_mode=(
+                llm.screenwriter_fallback_structured_output_mode
+            ),
+            narration_language=config.tts.language,
+        ),
+        artifacts_dir=artifacts_dir,
+    )
+    render_width, render_height = config.render.dimensions
+    return DirectorAgent(
+        runtime,
+        FootageAnalystAgent(
+            indexing.indexer,
+            indexing.story_structure_model,
+            artifacts_dir=artifacts_dir,
+        ),
+        screenwriter_agent=screenwriter,
+        narration_agent=create_narration_agent(config),
+        grounding_agent=create_grounding_agent(config),
+        sound_agent=create_sound_agent(config),
+        editor_agent=EditorAgent(
+            artifacts_dir=artifacts_dir,
+            min_voice_coverage=config.edit.min_voice_coverage,
+            max_voice_coverage=config.edit.max_voice_coverage,
+            breathing_room_s=config.edit.breathing_room_s,
+            max_freeze_per_clip_s=config.edit.max_freeze_per_clip_s,
+            max_title_duration_s=config.edit.max_title_duration_s,
+        ),
+        render_agent=RenderAgent(
+            FFmpegRenderer(
+                width=render_width,
+                height=render_height,
+                fps=config.render.fps,
+                video_codec=config.render.video_codec,
+            ),
+            artifacts_dir=artifacts_dir,
+            width=render_width,
+            height=render_height,
+        ),
+        review_agent=create_review_agent(config),
+        artifacts_dir=artifacts_dir,
+    )
+
+
 def create_narration_agent(config: AppConfig) -> NarrationAgent:
     return NarrationAgent(
         EdgeSpeechTTS(
             voice=config.tts.voice,
             rate=config.tts.rate,
-        )
+        ),
+        min_voice_coverage=config.edit.min_voice_coverage,
+        max_voice_coverage=config.edit.max_voice_coverage,
+        breathing_room_s=config.edit.breathing_room_s,
     )
 
 
@@ -73,6 +152,7 @@ def create_grounding_agent(config: AppConfig) -> GroundingAgent:
             timeout_s=config.vlm.timeout_s,
             max_retries=config.vlm.retries,
             request_interval_s=config.vlm.request_interval_s,
+            structured_output_mode=config.vlm.structured_output_mode,
         ),
         SceneRetriever(embedding),
         FFmpegGroundingFrameExtractor(config.vlm.max_image_dimension),
@@ -130,10 +210,14 @@ def create_review_agent(config: AppConfig) -> ReviewAgent:
             max_tokens=config.vlm.max_tokens,
             timeout_s=config.vlm.timeout_s,
             max_retries=config.vlm.retries,
+            structured_output_mode=config.vlm.structured_output_mode,
         ),
         FFmpegReviewFrameExtractor(),
         artifacts_dir=config.resolve(config.paths.artifacts_dir),
         max_frames=config.review.max_frames,
+        min_voice_coverage=config.edit.min_voice_coverage,
+        max_voice_coverage=config.edit.max_voice_coverage,
+        max_freeze_per_clip_s=config.edit.max_freeze_per_clip_s,
     )
 
 
@@ -158,6 +242,9 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         max_tokens=config.llm.scene_tagger_max_tokens,
         timeout_s=config.llm.timeout_s,
         max_retries=config.llm.retries,
+        max_parallel=config.llm.scene_tagger_max_parallel,
+        request_interval_s=config.llm.request_interval_s,
+        structured_output_mode=config.llm.structured_output_mode,
     )
     story_structure_model = OpenAICompatibleStoryStructureModel(
         model=config.llm.story_structure_model,
@@ -167,6 +254,7 @@ def create_indexing_runtime(config: AppConfig) -> IndexingRuntime:
         timeout_s=config.llm.timeout_s,
         max_retries=config.llm.retries,
         max_scenes_per_chunk=config.llm.story_structure_max_scenes_per_chunk,
+        structured_output_mode=config.llm.structured_output_mode,
     )
     indexer = HybridVideoIndexer(
         cache_dir=config.resolve(config.paths.cache_dir),

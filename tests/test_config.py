@@ -15,7 +15,9 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     assert config.scene_grouping.model == "clip-ViT-B-32"
     assert config.scene_grouping.similarity_threshold == 0.8
     assert config.scene_grouping.max_scene_duration_s == 15.0
-    assert config.llm.screenwriter_model == "gpt-5.6-luna"
+    assert config.llm.screenwriter_model == "deepseek-ai/DeepSeek-V3.2"
+    assert config.llm.api_key_env == "SILICONFLOW_API_KEY"
+    assert config.vlm.api_key_env == "SILICONFLOW_API_KEY"
     assert config.transcription.provider == "auto"
     assert config.grounding.candidate_limit == 4
     assert config.grounding.coarse_fps == 1
@@ -29,7 +31,7 @@ def test_project_config_loads_from_one_entrypoint() -> None:
     narration = create_narration_agent(config)
     assert isinstance(narration.tts, EdgeSpeechTTS)
     assert narration.tts.voice == "zh-CN-XiaoxiaoNeural"
-    assert narration.tts.rate == 185
+    assert narration.tts.rate == 160
 
     sound = create_sound_agent(config)
     assert isinstance(sound.music_library, DirectoryMusicLibrary)

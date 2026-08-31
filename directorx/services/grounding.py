@@ -17,6 +17,10 @@ from directorx.core.models import (
     ShotRequest,
     TimeRange,
 )
+from directorx.services.structured_output import (
+    StructuredOutputMode,
+    request_structured_output,
+)
 
 
 class FFmpegGroundingFrameExtractor:
@@ -151,16 +155,18 @@ class FFmpegGroundingFrameExtractor:
 class OpenAICompatibleGroundingModel:
     """Locate and refine source intervals with timestamped visual evidence."""
 
+    BOUNDARY_ROUNDING_TOLERANCE_S = 0.001
+
     LOCATE_SYSTEM_PROMPT = (
         "You are a professional footage grounding editor. Your task is to identify "
         "the exact source-video interval that best realizes the requested visual "
         "intent. Use only the supplied timestamped visual evidence and return the "
-        "strongest supported interval."
+        "strongest supported typed grounding decision."
     )
     REFINE_SYSTEM_PROMPT = (
         "You are a professional footage grounding editor. Refine the start and end "
         "boundaries of the candidate moment using the supplied dense timestamped "
-        "frames."
+        "frames. Return the same typed grounding decision."
     )
 
     def __init__(
@@ -168,12 +174,13 @@ class OpenAICompatibleGroundingModel:
         *,
         model: str = "Qwen/Qwen3-VL-8B-Instruct",
         base_url: str = "https://api.siliconflow.cn/v1",
-        api_key_env: str = "SILICONFLOW_API_KEY",
+        api_key_env: str = "VLM_API_KEY",
         api_key: str | None = None,
         max_tokens: int = 1200,
         timeout_s: float = 180.0,
         max_retries: int = 3,
         request_interval_s: float = 0.0,
+        structured_output_mode: StructuredOutputMode = "json_object",
         client: Any | None = None,
     ) -> None:
         if max_tokens <= 0:
@@ -183,6 +190,7 @@ class OpenAICompatibleGroundingModel:
         self.model = model
         self.max_tokens = max_tokens
         self.request_interval_s = request_interval_s
+        self.structured_output_mode = structured_output_mode
         self._request_lock = asyncio.Lock()
         self._last_request_at = 0.0
         if client is not None:
@@ -247,11 +255,11 @@ class OpenAICompatibleGroundingModel:
         if not frames:
             raise ValueError("Grounding VLM requires timestamped frames")
         frame_index = ", ".join(
-            f"{frame.id}={frame.timestamp_s:.3f}s" for frame in frames
+            f"{frame.id}={frame.timestamp_s:.6f}s" for frame in frames
         )
         proposal_context = (
-            f"Coarse proposal range: {candidate.proposal_range.start_s:.3f}s to "
-            f"{candidate.proposal_range.end_s:.3f}s\n"
+            f"Coarse proposal range: {candidate.proposal_range.start_s:.6f}s to "
+            f"{candidate.proposal_range.end_s:.6f}s\n"
             if candidate.proposal_range is not None
             else ""
         )
@@ -262,14 +270,15 @@ class OpenAICompatibleGroundingModel:
             f"Mood: {shot.mood}\n"
             f"Candidate anchor scene: {candidate.anchor_scene_id}\n"
             f"Candidate scene IDs: {', '.join(candidate.scene_ids)}\n"
-            f"Candidate source range: {candidate.source_range.start_s:.3f}s to "
-            f"{candidate.source_range.end_s:.3f}s\n"
+            f"Candidate source range: {candidate.source_range.start_s:.6f}s to "
+            f"{candidate.source_range.end_s:.6f}s\n"
             f"{proposal_context}"
             f"Ordered frame index: {frame_index}\n\n"
             "When the visual evidence does not support the intent, set matched to "
             "false, source_range to null, and evidence_frame_ids to an empty list. "
             "When matched, choose source_range.start_s and source_range.end_s within "
-            "the candidate range and cite the supporting frame IDs."
+            "the candidate range and cite the supporting frame IDs. Populate every "
+            "required decision property."
         )
         content: list[dict[str, Any]] = [{"type": "text", "text": request}]
         for frame in frames:
@@ -291,35 +300,72 @@ class OpenAICompatibleGroundingModel:
             if wait_s > 0:
                 await asyncio.sleep(wait_s)
             self._last_request_at = time.monotonic()
-        completion = await self._client.chat.completions.create(
+        decision = await request_structured_output(
+            self._client,
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
             ],
-            temperature=0.1,
+            schema=GroundingDecision,
+            schema_name=schema_name,
             max_tokens=self.max_tokens,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": GroundingDecision.model_json_schema(),
-                },
-            },
-            stream=False,
-            extra_body={"enable_thinking": False},
+            temperature=0.1,
+            mode=self.structured_output_mode,
+            validation_retries=1,
+            validate=lambda decision: self._validate_decision(
+                decision, candidate, frames
+            ),
         )
-        if not completion.choices:
-            raise ValueError("Grounding VLM returned no choices")
-        message = completion.choices[0].message
-        refusal = getattr(message, "refusal", None)
-        if refusal:
-            raise ValueError(f"Grounding VLM refused the request: {refusal}")
-        content_text = message.content
-        if not isinstance(content_text, str) or not content_text.strip():
-            raise ValueError("Grounding VLM returned no JSON")
-        return GroundingDecision.model_validate_json(content_text)
+        return self._clamp_boundary_rounding(decision, candidate)
+
+    @staticmethod
+    def _validate_decision(
+        decision: GroundingDecision,
+        candidate: GroundingCandidate,
+        frames: list[GroundingFrame],
+    ) -> None:
+        if not decision.matched:
+            return
+        source_range = decision.source_range
+        if source_range is None:
+            raise ValueError("Matched grounding requires a source range")
+        tolerance = OpenAICompatibleGroundingModel.BOUNDARY_ROUNDING_TOLERANCE_S
+        if (
+            source_range.start_s < candidate.source_range.start_s - tolerance
+            or source_range.end_s > candidate.source_range.end_s + tolerance
+        ):
+            raise ValueError(
+                "Grounding source range must stay inside the candidate; "
+                f"received {source_range.start_s:.6f}..{source_range.end_s:.6f}, "
+                f"candidate {candidate.source_range.start_s:.6f}.."
+                f"{candidate.source_range.end_s:.6f}"
+            )
+        frame_ids = {frame.id for frame in frames}
+        unknown = [
+            frame_id
+            for frame_id in decision.evidence_frame_ids
+            if frame_id not in frame_ids
+        ]
+        if unknown:
+            raise ValueError(
+                "Grounding cited unknown evidence frame IDs: " + ", ".join(unknown)
+            )
+
+    @staticmethod
+    def _clamp_boundary_rounding(
+        decision: GroundingDecision,
+        candidate: GroundingCandidate,
+    ) -> GroundingDecision:
+        """Clamp only sub-millisecond serialization drift to the true candidate."""
+        if not decision.matched or decision.source_range is None:
+            return decision
+        source_range = decision.source_range
+        clamped = TimeRange(
+            start_s=max(source_range.start_s, candidate.source_range.start_s),
+            end_s=min(source_range.end_s, candidate.source_range.end_s),
+        )
+        return decision.model_copy(update={"source_range": clamped})
 
     @staticmethod
     def _data_url(path: Path) -> str:

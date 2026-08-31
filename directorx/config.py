@@ -55,6 +55,9 @@ class VLMConfig(BaseModel):
     max_vlm_frames_per_scene: int = Field(gt=0)
     max_image_dimension: int = Field(gt=0)
     request_interval_s: float = Field(ge=0)
+    structured_output_mode: Literal["json_object", "tool_call", "prompted_json"] = (
+        "json_object"
+    )
 
 
 class LLMConfig(BaseModel):
@@ -68,14 +71,26 @@ class LLMConfig(BaseModel):
     story_structure_model: str = "gpt-5.6-luna"
     story_structure_max_tokens: int = Field(default=4000, gt=0)
     story_structure_max_scenes_per_chunk: int = Field(default=24, gt=0)
+    scene_tagger_max_parallel: int = Field(default=2, gt=0)
+    request_interval_s: float = Field(default=1.0, ge=0)
     timeout_s: float = Field(gt=0)
     retries: int = Field(ge=0)
+    screenwriter_fallback_model: str | None = None
+    screenwriter_fallback_base_url: str | None = None
+    screenwriter_fallback_api_key_env: str | None = None
+    structured_output_mode: Literal["json_object", "tool_call", "prompted_json"] = (
+        "prompted_json"
+    )
+    screenwriter_fallback_structured_output_mode: Literal[
+        "json_object", "tool_call", "prompted_json"
+    ] = "json_object"
 
 
 class TTSConfig(BaseModel):
     provider: Literal["edge"]
     voice: str
     rate: int = Field(gt=0)
+    language: str = "zh-CN"
 
 
 class GroundingConfig(BaseModel):
@@ -119,6 +134,11 @@ class RenderConfig(BaseModel):
 
 class EditConfig(BaseModel):
     target_duration_s: float = Field(gt=0)
+    min_voice_coverage: float = Field(default=0.65, ge=0, le=1)
+    max_voice_coverage: float = Field(default=0.88, ge=0, le=1)
+    breathing_room_s: float = Field(default=0.35, ge=0)
+    max_freeze_per_clip_s: float = Field(default=0.3, ge=0)
+    max_title_duration_s: float = Field(default=8.0, gt=0)
 
 
 class AppConfig(BaseModel):

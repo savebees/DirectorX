@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,8 +60,8 @@ def test_vlm_returns_plain_text_and_sends_images(tmp_path: Path) -> None:
 
 
 def test_vlm_requires_runtime_secret(monkeypatch) -> None:
-    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="SILICONFLOW_API_KEY"):
+    monkeypatch.delenv("VLM_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="VLM_API_KEY"):
         OpenAICompatibleDenseCaptioner()
 
 
@@ -70,22 +71,26 @@ class TaggerCompletions:
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        content = (
-            "CAPTION: A person stands inside a warehouse while warning someone "
-            "not to open a door.\n"
-            "SHORT_SUMMARY: A person warns someone about a closed door.\n"
-            "TAGS: warehouse; warning; door\n"
-            "CHARACTERS: person\n"
-            "ACTIONS: standing; warning\n"
-            "LOCATION: warehouse\n"
-            "OBJECTS: door"
+        content = json.dumps(
+            {
+                "caption": (
+                    "A person stands inside a warehouse while warning someone "
+                    "not to open a door."
+                ),
+                "short_summary": "A person warns someone about a closed door.",
+                "tags": ["warehouse", "warning", "door"],
+                "characters": ["person"],
+                "actions": ["standing", "warning"],
+                "location": "warehouse",
+                "objects": ["door"],
+            }
         )
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
 
 
-def test_scene_tagger_parses_fixed_text_after_dense_caption(tmp_path: Path) -> None:
+def test_scene_tagger_uses_typed_json_after_dense_caption(tmp_path: Path) -> None:
     completions = TaggerCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     scene = _scene(tmp_path)
@@ -95,6 +100,7 @@ def test_scene_tagger_parses_fixed_text_after_dense_caption(tmp_path: Path) -> N
 
     assert tags[scene.id].location == "warehouse"
     assert "response_format" not in completions.calls[0]
+    assert "JSON Schema" in completions.calls[0]["messages"][0]["content"]
     assert len(tags[scene.id].caption) > 20
     assert tags[scene.id].short_summary == (
         "A person warns someone about a closed door."
@@ -107,17 +113,3 @@ def test_scene_tagger_parses_fixed_text_after_dense_caption(tmp_path: Path) -> N
         "dense visual caption" in completions.calls[0]["messages"][1]["content"].lower()
     )
     assert "one concise" in prompt.lower()
-
-
-def test_scene_tagger_requires_short_summary() -> None:
-    content = (
-        "CAPTION: A person stands inside a warehouse.\n"
-        "TAGS: warehouse\n"
-        "CHARACTERS: person\n"
-        "ACTIONS: standing\n"
-        "LOCATION: warehouse\n"
-        "OBJECTS: none"
-    )
-
-    with pytest.raises(ValueError, match="SHORT_SUMMARY"):
-        OpenAICompatibleSceneTagger._parse_response(content, "scene-00001")

@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from directorx.core.models import GroundingFrame, ReviewReport
+from directorx.services.structured_output import (
+    StructuredOutputMode,
+    request_structured_output,
+)
 
 
 def _probe_duration(video_path: Path) -> float:
@@ -101,7 +105,8 @@ class OpenAICompatibleReviewModel:
         "Check whether the video is complete and narratively coherent, and "
         "whether it contains obvious visual errors, broken cuts, black frames, "
         "frozen frames, malformed crops, or corrupted overlays. Do not critique "
-        "creative taste. Approve the video when there are no clear defects."
+        "creative taste. Approve the video when there are no clear defects. Return "
+        "one typed review report."
     )
 
     def __init__(
@@ -109,16 +114,18 @@ class OpenAICompatibleReviewModel:
         *,
         model: str = "Qwen/Qwen3-VL-8B-Instruct",
         base_url: str = "https://api.siliconflow.cn/v1",
-        api_key_env: str = "SILICONFLOW_API_KEY",
+        api_key_env: str = "VLM_API_KEY",
         max_tokens: int = 800,
         timeout_s: float = 180.0,
         max_retries: int = 3,
+        structured_output_mode: StructuredOutputMode = "json_object",
         client: Any | None = None,
     ) -> None:
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
         self.model = model
         self.max_tokens = max_tokens
+        self.structured_output_mode = structured_output_mode
         if client is not None:
             self._client = client
             return
@@ -172,35 +179,20 @@ class OpenAICompatibleReviewModel:
                     },
                 ]
             )
-        completion = await self._client.chat.completions.create(
+        return await request_structured_output(
+            self._client,
             model=self.model,
             messages=[
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {"role": "user", "content": content},
             ],
-            temperature=0.1,
+            schema=ReviewReport,
+            schema_name="review_report",
             max_tokens=self.max_tokens,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "video_review",
-                    "strict": True,
-                    "schema": ReviewReport.model_json_schema(),
-                },
-            },
-            stream=False,
-            extra_body={"enable_thinking": False},
+            temperature=0.1,
+            mode=self.structured_output_mode,
+            validation_retries=1,
         )
-        if not completion.choices:
-            raise ValueError("Review VLM returned no choices")
-        message = completion.choices[0].message
-        refusal = getattr(message, "refusal", None)
-        if refusal:
-            raise ValueError(f"Review VLM refused the request: {refusal}")
-        text = message.content
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("Review VLM returned no JSON")
-        return ReviewReport.model_validate_json(text)
 
     @staticmethod
     def _data_url(path: Path) -> str:

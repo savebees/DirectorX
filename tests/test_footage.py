@@ -34,7 +34,11 @@ class FailingIndexer:
 
 
 class FixedStoryStructureModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def build(self, video_index: VideoIndex) -> StorySummary:
+        self.calls += 1
         scene_ids = [scene.id for scene in video_index.scenes]
         return StorySummary(
             title="Indexed story",
@@ -225,6 +229,37 @@ def test_footage_task_builds_and_persists_story_summary(tmp_path: Path) -> None:
     summary = StorySummary.model_validate_json(summary_path.read_text(encoding="utf-8"))
     assert summary.acts[0].source_range == TimeRange(start_s=0, end_s=10)
     assert summary.sequences[0].source_range == TimeRange(start_s=0, end_s=10)
+
+
+def test_footage_reuses_validated_story_summary_cache(tmp_path: Path) -> None:
+    video = tmp_path / "movie.mp4"
+    video.write_bytes(b"video")
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    search_db = index_dir / "search.sqlite3"
+    search_db.write_bytes(b"sqlite")
+    index = VideoIndex(
+        video_path=video,
+        duration_s=10,
+        scenes=[
+            Scene(
+                id="scene-00000",
+                source_range=TimeRange(start_s=0, end_s=10),
+                caption="A person enters a room.",
+            )
+        ],
+        search_db_path=search_db,
+    )
+    model = FixedStoryStructureModel()
+    first = FootageAnalystAgent(FixedIndexer(index), model)
+    summary = asyncio.run(first._load_or_build_story_summary(index))
+    second = FootageAnalystAgent(FixedIndexer(index), model)
+
+    cached = asyncio.run(second._load_or_build_story_summary(index))
+
+    assert cached == summary
+    assert model.calls == 1
+    assert (index_dir / "story-summary-v1.json").is_file()
 
 
 def test_footage_task_persists_blocked_result_when_story_model_fails(

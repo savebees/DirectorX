@@ -41,25 +41,31 @@ max_tokens = 1200
 max_vlm_frames_per_scene = 8
 max_image_dimension = 1024
 request_interval_s = 2.0
+structured_output_mode = "json_object"
 
 [llm]
 provider = "openai-compatible"
-base_url = "https://vyceai.com/v1"
-api_key_env = "VYCE_API_KEY"
-screenwriter_model = "gpt-5.6-luna"
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+screenwriter_model = "deepseek-ai/DeepSeek-V3.2"
 screenwriter_max_tokens = 4000
-scene_tagger_model = "gpt-5.6-luna"
+scene_tagger_model = "deepseek-ai/DeepSeek-V3.2"
 scene_tagger_max_tokens = 1200
-story_structure_model = "gpt-5.6-luna"
+story_structure_model = "deepseek-ai/DeepSeek-V3.2"
 story_structure_max_tokens = 4000
-story_structure_max_scenes_per_chunk = 24
+story_structure_max_scenes_per_chunk = 12
+scene_tagger_max_parallel = 2
+request_interval_s = 1.0
 timeout_s = 180.0
-retries = 3
+retries = 0
+structured_output_mode = "json_object"
+screenwriter_fallback_structured_output_mode = "json_object"
 
 [tts]
 provider = "edge"
 voice = "zh-CN-XiaoxiaoNeural"
-rate = 185
+rate = 160
+language = "zh-CN"
 
 [grounding]
 candidate_limit = 4
@@ -73,7 +79,7 @@ max_parallel = 2
 
 [sound]
 embedding_model = "laion/larger_clap_music"
-device = "auto"
+device = "cpu"
 analysis_window_s = 10.0
 analysis_windows_per_track = 3
 gain_db = -23.0
@@ -83,10 +89,15 @@ duck_under_voice_db = -9.0
 max_frames = 12
 
 [render]
-enabled = false
+enabled = true
 aspect = "landscape"
 fps = 30
 video_codec = "libx264"
 
 [edit]
 target_duration_s = 60.0
+min_voice_coverage = 0.65
+max_voice_coverage = 0.88
+breathing_room_s = 0.35
+max_freeze_per_clip_s = 0.3
+max_title_duration_s = 8.0

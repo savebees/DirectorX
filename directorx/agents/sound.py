@@ -220,7 +220,8 @@ class SoundAgent:
         if len(paths) != len(set(paths)):
             raise ValueError("Music index contains duplicate track paths")
         scored: list[tuple[float, float, MusicIndexEntry]] = []
-        for entry in music_index.entries:
+        entries = self._production_entries(music_index.entries)
+        for entry in entries:
             if entry.model_name != music_index.model_name:
                 raise ValueError("Music index entry model does not match the index")
             embedding = self._normalize(
@@ -250,11 +251,23 @@ class SoundAgent:
             duck_under_voice_db=self.duck_under_voice_db,
             selection_rationale=(
                 "Selected the highest-scoring whole-edit music match from "
-                f"{len(music_index.entries)} indexed tracks using "
+                f"{len(entries)} eligible indexed tracks using "
                 f"{music_index.model_name}. "
                 f"Query: {query}"
             ),
         )
+
+    @staticmethod
+    def _production_entries(entries: list[MusicIndexEntry]) -> list[MusicIndexEntry]:
+        placeholder_tags = {"test", "tone", "placeholder"}
+        production = [
+            entry
+            for entry in entries
+            if not placeholder_tags.intersection(
+                tag.casefold() for tag in entry.track.tags
+            )
+        ]
+        return production or entries
 
     @staticmethod
     def _artifact_path(task: TaskContext, name: str, filename: str) -> Path:

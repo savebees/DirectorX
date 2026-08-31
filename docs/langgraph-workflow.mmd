@@ -1,0 +1,27 @@
+flowchart TD
+    START([START]) --> F[Footage Analyst]
+    F -->|completed| SW[Screenwriter]
+    F -->|blocked| STOP1([STOP])
+    SW --> NG[Narration Gate]
+    SW --> GG[Grounding Gate]
+    NG -->|completed| N[Narration Agent]
+    NG -->|blocked| STOP2([STOP])
+    GG -->|completed| G[Grounding Agent]
+    GG -->|blocked| STOP3([STOP])
+    N --> SG[Sound Gate]
+    SG -->|completed| S[Sound Agent]
+    SG -->|blocked| J[Media Join]
+    G --> J
+    S --> J
+    J -->|Grounding + Sound completed| R[Render Agent]
+    J -->|either branch blocked| STOP4([STOP])
+    R -->|completed| V[Review Agent]
+    R -->|blocked| STOP5([STOP])
+    V --> END([END])
+
+    classDef agent fill:#e8f1ff,stroke:#356ae6,stroke-width:1px,color:#102a56
+    classDef gate fill:#fff4d6,stroke:#b7791f,stroke-width:1px,color:#5b3a00
+    classDef stop fill:#ffe7e7,stroke:#c53030,stroke-width:1px,color:#63171b
+    class F,SW,N,G,S,R,V agent
+    class NG,GG,SG,J gate
+    class STOP1,STOP2,STOP3,STOP4,STOP5 stop

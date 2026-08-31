@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+from collections import defaultdict
 from pathlib import Path
 
 from directorx.coordination import (
@@ -62,6 +63,12 @@ class SceneRetriever:
         preferred_scene_ids = list(shot.evidence_scene_ids)
         for sequence_id in shot.source_sequence_ids:
             preferred_scene_ids.extend(sequences[sequence_id].scene_ids)
+        allowed_scene_ids = set(preferred_scene_ids)
+        allowed_scenes = [scenes[scene_id] for scene_id in allowed_scene_ids]
+        allowed_range = TimeRange(
+            start_s=min(scene.source_range.start_s for scene in allowed_scenes),
+            end_s=max(scene.source_range.end_s for scene in allowed_scenes),
+        )
 
         scores: dict[str, float] = {}
         for scene_id in preferred_scene_ids:
@@ -84,6 +91,8 @@ class SceneRetriever:
             index.search_db_path, self.embedding_provider
         ).search(query, limit=limit * 2)
         for hit in hits:
+            if hit.scene_id not in allowed_scene_ids:
+                continue
             scores[hit.scene_id] = max(
                 scores.get(hit.scene_id, 0.0),
                 0.5 + hit.score * 0.4,
@@ -103,6 +112,7 @@ class SceneRetriever:
                 index,
                 padding_s,
                 number,
+                allowed_range,
             )
             for number, scene_id in enumerate(ranked, start=1)
         ]
@@ -117,12 +127,19 @@ class SceneRetriever:
         index: VideoIndex,
         padding_s: float,
         number: int,
+        allowed_range: TimeRange,
     ) -> GroundingCandidate:
         scenes = {scene.id: scene for scene in index.scenes}
         scene = scenes[scene_id]
         source_range = TimeRange(
-            start_s=max(0.0, scene.source_range.start_s - padding_s),
-            end_s=min(index.duration_s, scene.source_range.end_s + padding_s),
+            start_s=max(
+                allowed_range.start_s,
+                scene.source_range.start_s - padding_s,
+            ),
+            end_s=min(
+                allowed_range.end_s,
+                scene.source_range.end_s + padding_s,
+            ),
         )
         overlapping_scene_ids = [
             candidate.id
@@ -250,6 +267,11 @@ class GroundingAgent:
                 source_range = decision.source_range
                 if source_range is None:
                     raise ValueError("Matched refinement has no source range")
+                source_range = self._expand_verified_context(
+                    source_range,
+                    candidate.source_range,
+                    shot.target_duration_s,
+                )
                 source_scene_ids = [
                     scene.id
                     for scene in index.scenes
@@ -277,6 +299,23 @@ class GroundingAgent:
             raise ValueError(f"No candidate visually matches {shot.id}")
         raise ValueError(f"No candidate boundary could be refined for {shot.id}")
 
+    @staticmethod
+    def _expand_verified_context(
+        selected: TimeRange,
+        verified_candidate: TimeRange,
+        target_duration_s: float,
+    ) -> TimeRange:
+        duration_s = min(target_duration_s, verified_candidate.duration_s)
+        if selected.duration_s >= duration_s:
+            return selected
+        start_s = max(
+            verified_candidate.start_s,
+            selected.start_s - (duration_s - selected.duration_s) / 2,
+        )
+        end_s = min(verified_candidate.end_s, start_s + duration_s)
+        start_s = max(verified_candidate.start_s, end_s - duration_s)
+        return TimeRange(start_s=start_s, end_s=end_s)
+
     async def run_task(
         self,
         task: TaskContext,
@@ -290,7 +329,7 @@ class GroundingAgent:
         staging_dir: Path | None = None
         try:
             index, story_summary, storyboard, narration = self._load_artifacts(task)
-            shots = self._shot_requests(storyboard, narration, story_summary, index)
+            shots = self._shot_requests(storyboard, story_summary, index, narration)
             destination = artifacts_dir or self.artifacts_dir
             if destination is None:
                 raise ValueError("Grounding requires a configured artifacts directory")
@@ -303,6 +342,12 @@ class GroundingAgent:
             clips = await GroundingBatchProcessor(
                 self, max_parallel=self.max_parallel
             ).run(shots, index, story_summary, staging_dir)
+            starts = [clip.source_range.start_s for clip in clips]
+            if starts != sorted(starts):
+                raise ValueError(
+                    "Grounded clips violate approved source chronology: "
+                    + " -> ".join(f"{start:.3f}s" for start in starts)
+                )
             manifest = GroundingManifest(
                 source_video=index.video_path,
                 clips=clips,
@@ -328,7 +373,7 @@ class GroundingAgent:
             agent=self.role,
             status="completed",
             summary=(
-                f"Grounded {len(manifest.clips)} beats to "
+                f"Grounded {len(manifest.clips)} clips to "
                 f"{manifest.source_duration_s:.1f}s of visually verified footage "
                 f"for {manifest.target_duration_s:.1f}s of narration."
             ),
@@ -390,7 +435,7 @@ class GroundingAgent:
     @staticmethod
     def _load_artifacts(
         task: TaskContext,
-    ) -> tuple[VideoIndex, StorySummary, Storyboard, NarrationManifest]:
+    ) -> tuple[VideoIndex, StorySummary, Storyboard, NarrationManifest | None]:
         index_path = GroundingAgent._artifact_path(task, "video-index", "index.json")
         search_path = GroundingAgent._artifact_path(
             task, "scene-search-database", "search.sqlite3"
@@ -401,9 +446,11 @@ class GroundingAgent:
         storyboard_path = GroundingAgent._artifact_path(
             task, "storyboard", "storyboard.json"
         )
-        narration_path = GroundingAgent._artifact_path(
-            task, "narration-manifest", "narration.json"
-        )
+        narration_refs = [
+            artifact
+            for artifact in task.input_artifacts
+            if artifact.name == "narration-manifest"
+        ]
         if not search_path.is_file():
             raise FileNotFoundError(search_path)
         index = VideoIndex.model_validate_json(index_path.read_text(encoding="utf-8"))
@@ -414,9 +461,19 @@ class GroundingAgent:
         storyboard = Storyboard.model_validate_json(
             storyboard_path.read_text(encoding="utf-8")
         )
-        narration = NarrationManifest.model_validate_json(
-            narration_path.read_text(encoding="utf-8")
-        )
+        narration = None
+        if narration_refs:
+            if (
+                len(narration_refs) != 1
+                or narration_refs[0].path.name != "narration.json"
+            ):
+                raise ValueError(
+                    "Grounding task must declare exactly one narration-manifest "
+                    "narration.json input artifact"
+                )
+            narration = NarrationManifest.model_validate_json(
+                narration_refs[0].path.read_text(encoding="utf-8")
+            )
         return index, validate_story_summary(index, summary), storyboard, narration
 
     @staticmethod
@@ -434,18 +491,22 @@ class GroundingAgent:
     @staticmethod
     def _shot_requests(
         storyboard: Storyboard,
-        narration: NarrationManifest,
         story_summary: StorySummary,
         index: VideoIndex,
+        narration: NarrationManifest | None = None,
     ) -> list[ShotRequest]:
         if not storyboard.beats:
             raise ValueError("Grounding requires at least one storyboard beat")
         beat_ids = [beat.id for beat in storyboard.beats]
         if len(beat_ids) != len(set(beat_ids)):
             raise ValueError("Storyboard beat ids must be unique")
-        segments = {segment.beat_id: segment for segment in narration.segments}
-        if len(segments) != len(narration.segments) or set(segments) != set(beat_ids):
-            raise ValueError("Narration must contain exactly one segment per beat")
+        segments = None
+        if narration is not None:
+            segments = {segment.beat_id: segment for segment in narration.segments}
+            if len(segments) != len(narration.segments) or set(segments) != set(
+                beat_ids
+            ):
+                raise ValueError("Narration must contain exactly one segment per beat")
         sequences = {sequence.id: sequence for sequence in story_summary.sequences}
         scene_ids = {scene.id for scene in index.scenes}
         requests = []
@@ -477,24 +538,83 @@ class GroundingAgent:
                 raise ValueError(
                     f"Storyboard beat {beat.id} has invalid evidence scenes"
                 )
-            segment = segments[beat.id]
-            if segment.text != beat.narration:
+            segment = segments.get(beat.id) if segments is not None else None
+            if segment is not None and segment.text != beat.narration:
                 raise ValueError(
                     f"Narration text does not match storyboard beat {beat.id}"
                 )
-            requests.append(
-                ShotRequest(
-                    id=f"shot-{beat.id}",
-                    beat_id=beat.id,
-                    narration_text=segment.text,
-                    story_content=beat.story_content,
-                    visual_query=beat.visual_intent,
-                    mood=beat.mood,
-                    target_duration_s=segment.duration_s,
-                    source_sequence_ids=beat.source_sequence_ids,
-                    evidence_scene_ids=beat.evidence_scene_ids,
-                )
+            requested_duration_s = (
+                segment.duration_s if segment is not None else beat.target_duration_s
             )
+            scenes = {scene.id: scene for scene in index.scenes}
+            units: list[tuple[str, list[str], float]] = []
+            for sequence_id in beat.source_sequence_ids:
+                sequence = sequences[sequence_id]
+                cited = [
+                    scene_id
+                    for scene_id in beat.evidence_scene_ids
+                    if scene_id in sequence.scene_ids
+                ]
+                evidence_groups = [[scene_id] for scene_id in cited]
+                if not evidence_groups:
+                    evidence_groups = [list(sequence.scene_ids)]
+                for evidence_group in evidence_groups:
+                    units.append(
+                        (
+                            sequence_id,
+                            evidence_group,
+                            sum(
+                                scenes[scene_id].source_range.duration_s
+                                for scene_id in evidence_group
+                            ),
+                        )
+                    )
+            total_source_duration_s = sum(unit[2] for unit in units)
+            if total_source_duration_s <= 0:
+                raise ValueError(f"Storyboard beat {beat.id} has no usable footage")
+            allocated_s = 0.0
+            for position, (sequence_id, evidence_group, source_duration_s) in enumerate(
+                units,
+                start=1,
+            ):
+                if position == len(units):
+                    target_duration_s = requested_duration_s - allocated_s
+                else:
+                    target_duration_s = (
+                        requested_duration_s
+                        * source_duration_s
+                        / total_source_duration_s
+                    )
+                    allocated_s += target_duration_s
+                sequence = sequences[sequence_id]
+                shot_id = f"shot-{beat.id}"
+                if len(units) > 1:
+                    shot_id += f"-{position:02d}"
+                evidence_summary = " ".join(
+                    scenes[scene_id].short_summary or scenes[scene_id].caption
+                    for scene_id in evidence_group
+                )
+                requests.append(
+                    ShotRequest(
+                        id=shot_id,
+                        beat_id=beat.id,
+                        narration_text=(
+                            segment.text if segment is not None else beat.narration
+                        ),
+                        story_content=(
+                            f"{beat.story_content} Sequence: "
+                            f"{sequence.short_summary} Scene: {evidence_summary}"
+                        ),
+                        visual_query=(
+                            f"{beat.visual_intent} Sequence: "
+                            f"{sequence.short_summary} Scene: {evidence_summary}"
+                        ),
+                        mood=beat.mood,
+                        target_duration_s=target_duration_s,
+                        source_sequence_ids=[sequence_id],
+                        evidence_scene_ids=evidence_group,
+                    )
+                )
         return requests
 
     @staticmethod
@@ -548,4 +668,76 @@ class GroundingBatchProcessor:
                     work_dir / shot.id,
                 )
 
-        return list(await asyncio.gather(*(ground(shot) for shot in shots)))
+        results = await asyncio.gather(
+            *(ground(shot) for shot in shots),
+            return_exceptions=True,
+        )
+        clips = [result for result in results if isinstance(result, GroundedClip)]
+        successful_beats = {clip.beat_id for clip in clips}
+        required_beats = {shot.beat_id for shot in shots}
+        missing_beats = sorted(required_beats - successful_beats)
+        if missing_beats:
+            details = [
+                f"{shot.id}: {result}"
+                for shot, result in zip(shots, results, strict=True)
+                if shot.beat_id in missing_beats and isinstance(result, Exception)
+            ]
+            raise ValueError(
+                "No visually verified clip remains for beats "
+                + ", ".join(missing_beats)
+                + (f" ({'; '.join(details)})" if details else "")
+            )
+        beat_order = list(dict.fromkeys(shot.beat_id for shot in shots))
+        clips_by_beat: dict[str, list[GroundedClip]] = defaultdict(list)
+        for clip in clips:
+            clips_by_beat[clip.beat_id].append(clip)
+        return [
+            clip
+            for beat_id in beat_order
+            for clip in self._merge_overlapping(clips_by_beat[beat_id])
+        ]
+
+    @staticmethod
+    def _merge_overlapping(clips: list[GroundedClip]) -> list[GroundedClip]:
+        merged: list[GroundedClip] = []
+        for clip in sorted(clips, key=lambda item: item.source_range.start_s):
+            if not merged or clip.source_range.start_s >= merged[-1].source_range.end_s:
+                merged.append(clip)
+                continue
+            previous = merged[-1]
+            evidence = list(
+                dict.fromkeys(
+                    zip(
+                        [*previous.evidence_frame_ids, *clip.evidence_frame_ids],
+                        [
+                            *previous.evidence_timestamps_s,
+                            *clip.evidence_timestamps_s,
+                        ],
+                        strict=True,
+                    )
+                )
+            )
+            merged[-1] = previous.model_copy(
+                update={
+                    "source_scene_ids": list(
+                        dict.fromkeys(
+                            [*previous.source_scene_ids, *clip.source_scene_ids]
+                        )
+                    ),
+                    "source_range": TimeRange(
+                        start_s=previous.source_range.start_s,
+                        end_s=max(
+                            previous.source_range.end_s,
+                            clip.source_range.end_s,
+                        ),
+                    ),
+                    "target_duration_s": (
+                        previous.target_duration_s + clip.target_duration_s
+                    ),
+                    "confidence": min(previous.confidence, clip.confidence),
+                    "evidence_frame_ids": [item[0] for item in evidence],
+                    "evidence_timestamps_s": [item[1] for item in evidence],
+                    "rationale": f"{previous.rationale} {clip.rationale}".strip(),
+                }
+            )
+        return merged

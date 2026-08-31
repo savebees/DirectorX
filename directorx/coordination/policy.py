@@ -13,6 +13,16 @@ CONSULTATION_WHITELIST = {
         {AgentRole.FOOTAGE_ANALYST, AgentRole.SCREENWRITER, AgentRole.DIRECTOR}
     ),
     AgentRole.SOUND: frozenset({AgentRole.NARRATION, AgentRole.DIRECTOR}),
+    AgentRole.EDITOR: frozenset(
+        {
+            AgentRole.SCREENWRITER,
+            AgentRole.NARRATION,
+            AgentRole.GROUNDING,
+            AgentRole.SOUND,
+            AgentRole.DIRECTOR,
+        }
+    ),
+    AgentRole.RENDER: frozenset({AgentRole.DIRECTOR}),
     AgentRole.REVIEW: frozenset({AgentRole.DIRECTOR}),
 }
 

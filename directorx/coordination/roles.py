@@ -36,6 +36,17 @@ ROLE_DEFINITIONS = {
         title="Sound Agent",
         responsibility="Own music selection, sound design, and mix intent.",
     ),
+    AgentRole.EDITOR: RoleDefinition(
+        title="Editor Agent",
+        responsibility=(
+            "Reconcile narration timing, grounded footage, pacing, and the final "
+            "edit timeline."
+        ),
+    ),
+    AgentRole.RENDER: RoleDefinition(
+        title="Render Agent",
+        responsibility="Compile grounded clips, narration, and sound into a video.",
+    ),
     AgentRole.REVIEW: RoleDefinition(
         title="Review Agent",
         responsibility="Independently review approved artifacts and report issues.",

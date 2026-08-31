@@ -21,6 +21,7 @@ class FootageAnalystAgent:
     """Understand a source video and build its searchable scene index."""
 
     role = AgentRole.FOOTAGE_ANALYST
+    STORY_CACHE_VERSION = 1
 
     def __init__(
         self,
@@ -73,9 +74,7 @@ class FootageAnalystAgent:
         ]
         if self.story_structure_model is not None:
             try:
-                summary = validate_story_summary(
-                    index, await self.story_structure_model.build(index)
-                )
+                summary = await self._load_or_build_story_summary(index)
                 hierarchy_store = self.hierarchy_store
                 embedding_provider = getattr(self.indexer, "embedding_provider", None)
                 if hierarchy_store is None and embedding_provider is not None:
@@ -120,6 +119,48 @@ class FootageAnalystAgent:
         )
         runtime.submit_result(self.role, result)
         return result
+
+    async def _load_or_build_story_summary(self, index: VideoIndex) -> StorySummary:
+        if index.search_db_path is None:
+            raise ValueError("Story hierarchy cache requires a search database")
+        cache_path = index.search_db_path.with_name(
+            f"story-summary-v{self.STORY_CACHE_VERSION}.json"
+        )
+        if cache_path.is_file():
+            cached = StorySummary.model_validate_json(
+                cache_path.read_text(encoding="utf-8")
+            )
+            return validate_story_summary(index, cached)
+        if self.story_structure_model is None:
+            raise ValueError("Story hierarchy model is not configured")
+        summary = validate_story_summary(
+            index,
+            await self.story_structure_model.build(index),
+        )
+        self._persist_story_cache(summary, cache_path)
+        return summary
+
+    @staticmethod
+    def _persist_story_cache(summary: StorySummary, path: Path) -> None:
+        descriptor, raw_path = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+        )
+        os.close(descriptor)
+        temporary = Path(raw_path)
+        try:
+            temporary.write_text(
+                summary.model_dump_json(indent=2) + "\n",
+                encoding="utf-8",
+            )
+            if path.exists():
+                return
+            os.replace(temporary, path)
+            temporary = None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _persist_story_summary(summary: StorySummary, artifacts_dir: Path) -> Path:

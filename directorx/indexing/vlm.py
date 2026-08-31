@@ -28,7 +28,7 @@ class OpenAICompatibleDenseCaptioner:
         *,
         model: str = "Qwen/Qwen3-VL-8B-Instruct",
         base_url: str = "https://api.siliconflow.cn/v1",
-        api_key_env: str = "SILICONFLOW_API_KEY",
+        api_key_env: str = "VLM_API_KEY",
         api_key: str | None = None,
         max_parallel: int = 2,
         timeout_s: float = 120.0,
@@ -130,7 +130,6 @@ class OpenAICompatibleDenseCaptioner:
             temperature=0.2,
             max_tokens=self.max_tokens,
             stream=False,
-            extra_body={"enable_thinking": False},
         )
         return self._message_text(completion)
 

@@ -238,6 +238,27 @@ def test_sound_task_reads_music_index_without_decoding_audio(tmp_path: Path) -> 
     ]
 
 
+def test_sound_excludes_placeholder_tracks_when_music_is_available(
+    tmp_path: Path,
+) -> None:
+    test_track, music_track = _tracks(tmp_path)
+    test_track = test_track.model_copy(update={"tags": ["test", "tone"]})
+    music_track = music_track.model_copy(update={"tags": ["cinematic"]})
+    entries = [
+        MusicIndexEntry(
+            track=track,
+            embedding=[1.0, 0.0],
+            analysis_windows=[TimeRange(start_s=0, end_s=track.duration_s)],
+            model_name="fake-clap",
+        )
+        for track in (test_track, music_track)
+    ]
+
+    eligible = SoundAgent._production_entries(entries)
+
+    assert [entry.track for entry in eligible] == [music_track]
+
+
 def test_sound_requires_music_index_for_production_tasks(tmp_path: Path) -> None:
     paths = _source_artifacts(tmp_path)
     task = _task(paths, "sound-missing-index")

@@ -187,20 +187,41 @@ class LocalClapAudioTextEmbeddingProvider:
         inputs = {name: value.to(self._device) for name, value in inputs.items()}
         with self._torch.inference_mode():
             features = self._model.get_text_features(**inputs)
+        features = self._feature_tensor(features)
         return features[0].detach().cpu().float().tolist()
 
     def _embed_audio_sync(self, waveforms: list[Any]) -> list[list[float]]:
         self._load_backend()
-        inputs = self._processor(
-            audios=waveforms,
-            sampling_rate=self.sample_rate,
-            return_tensors="pt",
-            padding=True,
-        )
+        # Transformers 5 renamed the CLAP processor keyword from ``audios``
+        # to ``audio``. Use the current spelling; older supported releases
+        # are handled by the small compatibility fallback below.
+        try:
+            inputs = self._processor(
+                audio=waveforms,
+                sampling_rate=self.sample_rate,
+                return_tensors="pt",
+                padding=True,
+            )
+        except (TypeError, ValueError) as exc:
+            if "audios" not in str(exc) and "audio" not in str(exc):
+                raise
+            inputs = self._processor(
+                audios=waveforms,
+                sampling_rate=self.sample_rate,
+                return_tensors="pt",
+                padding=True,
+            )
         inputs = {name: value.to(self._device) for name, value in inputs.items()}
         with self._torch.inference_mode():
             features = self._model.get_audio_features(**inputs)
+        features = self._feature_tensor(features)
         return features.detach().cpu().float().tolist()
+
+    @staticmethod
+    def _feature_tensor(features: Any) -> Any:
+        """Normalize CLAP outputs across Transformers tensor/model-output APIs."""
+        pooled = getattr(features, "pooler_output", None)
+        return pooled if pooled is not None else features
 
     def _decode_window(self, path: Path, window: TimeRange):
         try:

@@ -151,31 +151,32 @@ class SceneInspection(BaseModel):
 
 
 class ScreenplayBeat(BaseModel):
-    id: str
-    purpose: str
-    story_content: str
-    visual_intent: str
-    mood: str
+    id: str = Field(min_length=1)
+    purpose: str = Field(min_length=1)
+    story_content: str = Field(min_length=1)
+    visual_intent: str = Field(min_length=1)
+    mood: str = Field(min_length=1)
     target_duration_s: float = Field(gt=0)
-    source_sequence_ids: list[str]
+    source_sequence_ids: list[str] = Field(min_length=1, max_length=3)
 
 
 class Screenplay(BaseModel):
-    title: str
-    logline: str
-    narrative_angle: str
-    beats: list[ScreenplayBeat]
+    title: str = Field(min_length=1)
+    logline: str = Field(min_length=1)
+    narrative_angle: str = Field(min_length=1)
+    beats: list[ScreenplayBeat] = Field(min_length=1)
     target_duration_s: float = Field(gt=0)
 
 
 class BeatNarration(BaseModel):
-    beat_id: str
-    narration: str
-    evidence_scene_ids: list[str]
+    beat_id: str = Field(min_length=1)
+    narration: str = Field(min_length=1)
+    evidence_scene_ids: list[str] = Field(min_length=1)
 
 
 class NarrationDraft(BaseModel):
-    beats: list[BeatNarration]
+    full_narration: str = ""
+    beats: list[BeatNarration] = Field(min_length=1)
 
 
 class ScreenwriterSceneEvidence(BaseModel):
@@ -201,6 +202,7 @@ class Storyboard(BaseModel):
     title: str
     logline: str
     narrative_angle: str
+    full_narration: str = ""
     beats: list[StoryBeat]
     target_duration_s: float = Field(gt=0)
 
@@ -287,6 +289,28 @@ class GroundingManifest(BaseModel):
     source_duration_s: float = Field(gt=0)
 
 
+class TimelineBeat(BaseModel):
+    beat_id: str = Field(min_length=1)
+    clip_ids: list[str] = Field(min_length=1)
+    start_s: float = Field(ge=0)
+    duration_s: float = Field(gt=0)
+    narration_duration_s: float = Field(gt=0)
+
+    @property
+    def end_s(self) -> float:
+        return self.start_s + self.duration_s
+
+
+class EditTimeline(BaseModel):
+    source_video: Path
+    clips: list[GroundedClip] = Field(min_length=1)
+    beats: list[TimelineBeat] = Field(min_length=1)
+    target_duration_s: float = Field(gt=0)
+    duration_s: float = Field(gt=0)
+    voice_coverage: float = Field(ge=0, le=1)
+    freeze_duration_s: float = Field(ge=0)
+
+
 class MusicTrack(BaseModel):
     path: Path
     title: str
@@ -328,13 +352,14 @@ class ReviewIssue(BaseModel):
 
 class ReviewReport(BaseModel):
     passed: bool
-    summary: str
+    summary: str = Field(min_length=1)
     issues: list[ReviewIssue] = Field(default_factory=list)
 
 
 class RenderPlan(BaseModel):
     source_video: Path
     clips: list[GroundedClip]
+    beats: list[TimelineBeat]
     narration: list[NarrationSegment]
     sound: SoundPlan
     output_path: Path

@@ -13,6 +13,7 @@ from directorx.coordination import (
     TaskContext,
     TaskResult,
 )
+from directorx.coordination.policy import CONSULTATION_WHITELIST, can_consult
 
 
 class UnusedIndexer:
@@ -97,6 +98,12 @@ def test_consultation_whitelist_and_single_response(tmp_path) -> None:
                 }
             )
         )
+
+
+def test_every_agent_role_has_a_consultation_policy() -> None:
+    assert set(CONSULTATION_WHITELIST) == set(AgentRole)
+    assert can_consult(AgentRole.RENDER, AgentRole.DIRECTOR)
+    assert not can_consult(AgentRole.RENDER, AgentRole.SOUND)
 
 
 def test_review_is_isolated_and_context_files_stay_scoped(tmp_path) -> None:

@@ -184,11 +184,6 @@ class SceneSearchStore:
             for sequence in summary.sequences
             if sequence.source_range is not None
         )
-        embeddings = await self.embedding_provider.embed(
-            [record[5] for record in records]
-        )
-        if len(embeddings) != len(records):
-            raise ValueError("Embedding provider returned the wrong number of vectors")
         with sqlite3.connect(self.path) as connection:
             connection.executescript(
                 """
@@ -208,7 +203,18 @@ class SceneSearchStore:
                 """
             )
             if connection.execute("SELECT 1 FROM index_nodes LIMIT 1").fetchone():
-                raise FileExistsError("Story hierarchy already exists in search index")
+                # Source-video caches are shared by immutable project runs. Keep
+                # the first hierarchy rather than blocking later runs or
+                # overwriting evidence that another project may reference.
+                return
+        embeddings = await self.embedding_provider.embed(
+            [record[5] for record in records]
+        )
+        if len(embeddings) != len(records):
+            raise ValueError("Embedding provider returned the wrong number of vectors")
+        with sqlite3.connect(self.path) as connection:
+            if connection.execute("SELECT 1 FROM index_nodes LIMIT 1").fetchone():
+                return
             for record, embedding in zip(records, embeddings, strict=True):
                 connection.execute(
                     "INSERT INTO index_nodes VALUES (?, ?, ?, ?, ?, ?, ?)",

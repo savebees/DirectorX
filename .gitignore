@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
+/.venv*/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -11,9 +11,10 @@ __pycache__/
 htmlcov/
 
 # Runtime output
-.video-index/
-artifacts/
-data/
+/.video-index*/
+/artifacts/
+/coordination/
+/data/
 
 # Local source media
 media/music/*

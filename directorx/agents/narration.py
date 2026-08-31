@@ -5,6 +5,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -22,11 +23,25 @@ from directorx.core.ports import TextToSpeech
 class NarrationAgent:
     role = AgentRole.NARRATION
 
-    def __init__(self, tts: TextToSpeech, max_parallel: int = 4) -> None:
+    def __init__(
+        self,
+        tts: TextToSpeech,
+        max_parallel: int = 4,
+        min_voice_coverage: float = 0.0,
+        max_voice_coverage: float = float("inf"),
+        breathing_room_s: float = 0.35,
+    ) -> None:
         if max_parallel <= 0:
             raise ValueError("max_parallel must be positive")
+        if min_voice_coverage < 0 or max_voice_coverage < min_voice_coverage:
+            raise ValueError("Narration coverage bounds are invalid")
+        if breathing_room_s < 0:
+            raise ValueError("Narration breathing room must be non-negative")
         self.tts = tts
         self.max_parallel = max_parallel
+        self.min_voice_coverage = min_voice_coverage
+        self.max_voice_coverage = max_voice_coverage
+        self.breathing_room_s = breathing_room_s
 
     async def run(
         self, storyboard: Storyboard, audio_dir: Path
@@ -89,6 +104,15 @@ class NarrationAgent:
                 tempfile.mkdtemp(dir=artifacts_dir, prefix=".narration.")
             )
             staging_segments = await self.run(storyboard, staging_dir)
+            staging_segments = await asyncio.to_thread(
+                self._normalize_coverage,
+                staging_segments,
+                storyboard.target_duration_s,
+            )
+            staging_segments = await asyncio.to_thread(
+                self._fit_segment_windows,
+                staging_segments,
+            )
             segments = [
                 segment.model_copy(
                     update={
@@ -102,6 +126,17 @@ class NarrationAgent:
                 target_duration_s=storyboard.target_duration_s,
                 duration_s=sum(segment.duration_s for segment in segments),
             )
+            coverage = manifest.duration_s / manifest.target_duration_s
+            if coverage < self.min_voice_coverage:
+                raise ValueError(
+                    f"Voice coverage {coverage:.1%} is below "
+                    f"{self.min_voice_coverage:.1%}"
+                )
+            if coverage > self.max_voice_coverage:
+                raise ValueError(
+                    f"Voice coverage {coverage:.1%} exceeds "
+                    f"{self.max_voice_coverage:.1%}"
+                )
             self._write_manifest(manifest, staging_dir / "narration.json")
             os.replace(staging_dir, destination)
             staging_dir = None
@@ -162,3 +197,121 @@ class NarrationAgent:
             stream.write(manifest.model_dump_json(indent=2) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
+
+    def _normalize_coverage(
+        self,
+        segments: list[NarrationSegment],
+        target_duration_s: float,
+    ) -> list[NarrationSegment]:
+        duration_s = sum(segment.duration_s for segment in segments)
+        coverage = duration_s / target_duration_s
+        if self.min_voice_coverage <= coverage <= self.max_voice_coverage:
+            return segments
+        desired_coverage = (
+            self.min_voice_coverage
+            if coverage < self.min_voice_coverage
+            else self.max_voice_coverage
+        )
+        tempo = coverage / desired_coverage
+        if not 0.85 <= tempo <= 1.30:
+            raise ValueError(
+                f"Voice coverage {coverage:.1%} requires an unsafe "
+                f"{tempo:.2f}x tempo adjustment"
+            )
+        normalized = []
+        for segment in segments:
+            temporary = segment.audio_path.with_suffix(".retimed.wav")
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-i",
+                        str(segment.audio_path),
+                        "-filter:a",
+                        f"atempo={tempo:.6f}",
+                        str(temporary),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                os.replace(temporary, segment.audio_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            normalized.append(
+                segment.model_copy(
+                    update={
+                        "duration_s": self._probe_duration(segment.audio_path),
+                    }
+                )
+            )
+        return normalized
+
+    def _fit_segment_windows(
+        self, segments: list[NarrationSegment]
+    ) -> list[NarrationSegment]:
+        if not math.isfinite(self.max_voice_coverage):
+            return segments
+        fitted = []
+        for segment in segments:
+            maximum_s = max(0.1, segment.target_duration_s - self.breathing_room_s)
+            if segment.duration_s <= maximum_s + 1e-6:
+                fitted.append(segment)
+                continue
+            tempo = segment.duration_s / maximum_s
+            if tempo > 1.30:
+                raise ValueError(
+                    f"Narration segment {segment.beat_id} requires an unsafe "
+                    f"{tempo:.2f}x tempo adjustment"
+                )
+            temporary = segment.audio_path.with_suffix(".fitted.wav")
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-i",
+                        str(segment.audio_path),
+                        "-filter:a",
+                        f"atempo={tempo:.6f}",
+                        str(temporary),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                os.replace(temporary, segment.audio_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            fitted.append(
+                segment.model_copy(
+                    update={"duration_s": self._probe_duration(segment.audio_path)}
+                )
+            )
+        return fitted
+
+    @staticmethod
+    def _probe_duration(path: Path) -> float:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return float(result.stdout.strip())
