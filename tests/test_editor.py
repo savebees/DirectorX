@@ -129,6 +129,21 @@ def test_editor_blocks_short_narration(tmp_path: Path) -> None:
         EditorAgent().run(storyboard, grounding, narration, sound)
 
 
+def test_editor_preserves_a_silent_visual_beat(tmp_path: Path) -> None:
+    storyboard, grounding, narration, sound = _inputs(tmp_path)
+    storyboard.beats[-1].narration = ""
+    removed = narration.segments.pop()
+    narration.duration_s -= removed.duration_s
+
+    timeline = EditorAgent(min_voice_coverage=0).run(
+        storyboard, grounding, narration, sound
+    )
+
+    assert timeline.beats[-1].beat_id == "beat-04"
+    assert timeline.beats[-1].narration_duration_s == 0
+    assert timeline.duration_s == pytest.approx(60)
+
+
 def test_editor_blocks_when_verified_footage_cannot_cover_voice(
     tmp_path: Path,
 ) -> None:

@@ -19,6 +19,7 @@ from directorx.core.models import (
     CharacterArc,
     MajorEvent,
     MusicTrack,
+    NarrationDelivery,
     NarrationDraft,
     Scene,
     SceneTags,
@@ -29,6 +30,7 @@ from directorx.core.models import (
     StorySequence,
     StorySummary,
     VideoIndex,
+    VoiceProfile,
 )
 from directorx.services.structured_output import (
     StructuredOutputMode,
@@ -131,7 +133,9 @@ class OpenAICompatibleScreenwriterModel:
         " Compose one continuous voice-over with setup, escalation, turn, and payoff, "
         "then return it as ordered beat records without isolated taglines. The "
         "application derives full_narration from those records, so do not duplicate "
-        "the same script in full_narration."
+        "the same script in full_narration. Narration fields contain spoken words "
+        "only: never include parenthetical stage directions, shot notes, title-card "
+        "instructions, music cues, or sound effects."
     )
 
     def __init__(
@@ -1280,10 +1284,51 @@ vague adjectives, and speculative labels."""
 class EdgeSpeechTTS:
     """Cross-platform Chinese Edge TTS with fail-fast error handling."""
 
+    _ZH_CN_PROFILES = (
+        VoiceProfile(
+            voice_id="zh-CN-YunyangNeural",
+            display_name="云扬",
+            traits=["serious", "dark", "professional", "reliable", "mysterious"],
+            base_rate=165,
+            base_pitch_hz=-8,
+        ),
+        VoiceProfile(
+            voice_id="zh-CN-YunjianNeural",
+            display_name="云健",
+            traits=["action", "intense", "epic", "passionate"],
+            base_rate=170,
+            base_pitch_hz=-3,
+        ),
+        VoiceProfile(
+            voice_id="zh-CN-XiaoxiaoNeural",
+            display_name="晓晓",
+            traits=["warm", "emotional", "gentle", "neutral", "narrative"],
+            base_rate=175,
+            base_pitch_hz=0,
+        ),
+        VoiceProfile(
+            voice_id="zh-CN-YunxiNeural",
+            display_name="云希",
+            traits=["youthful", "adventure", "lively", "hopeful"],
+            base_rate=175,
+            base_pitch_hz=0,
+        ),
+        VoiceProfile(
+            voice_id="zh-CN-XiaoyiNeural",
+            display_name="晓伊",
+            traits=["comedy", "bright", "lively", "playful"],
+            base_rate=180,
+            base_pitch_hz=4,
+        ),
+    )
+
     def __init__(
         self,
         voice: str = "zh-CN-XiaoxiaoNeural",
         rate: int = 185,
+        pitch_hz: int = 0,
+        volume_percent: int = 0,
+        language: str = "zh-CN",
         max_retries: int = 3,
         retry_delay_s: float = 1.0,
     ) -> None:
@@ -1291,10 +1336,37 @@ class EdgeSpeechTTS:
             raise ValueError("max_retries must be non-negative")
         if retry_delay_s < 0:
             raise ValueError("retry_delay_s must be non-negative")
+        if not -100 <= pitch_hz <= 100:
+            raise ValueError("pitch_hz must be between -100 and 100")
+        if not -100 <= volume_percent <= 100:
+            raise ValueError("volume_percent must be between -100 and 100")
         self.voice = voice
         self.rate = rate
+        self.pitch_hz = pitch_hz
+        self.volume_percent = volume_percent
+        self.language = language
         self.max_retries = max_retries
         self.retry_delay_s = retry_delay_s
+
+    def voice_profiles(self) -> list[VoiceProfile]:
+        if self.language != "zh-CN":
+            raise ValueError(f"No automatic Edge voice catalog for {self.language}")
+        return [profile.model_copy(deep=True) for profile in self._ZH_CN_PROFILES]
+
+    def configure(self, delivery: NarrationDelivery) -> EdgeSpeechTTS:
+        delivery = NarrationDelivery.model_validate(delivery)
+        available = {profile.voice_id for profile in self.voice_profiles()}
+        if delivery.voice_id not in available:
+            raise ValueError(f"Unknown Edge narration voice: {delivery.voice_id}")
+        return EdgeSpeechTTS(
+            voice=delivery.voice_id,
+            rate=delivery.rate,
+            pitch_hz=delivery.pitch_hz,
+            volume_percent=delivery.volume_percent,
+            language=self.language,
+            max_retries=self.max_retries,
+            retry_delay_s=self.retry_delay_s,
+        )
 
     async def synthesize(self, text: str, output_path: Path) -> float:
         return await asyncio.to_thread(self._synthesize_sync, text, output_path)
@@ -1321,7 +1393,11 @@ class EdgeSpeechTTS:
 
             async def save() -> None:
                 communicator = edge_tts.Communicate(
-                    text, self.voice, rate=self._edge_rate()
+                    text,
+                    self.voice,
+                    rate=self._edge_rate(),
+                    pitch=self._edge_pitch(),
+                    volume=self._edge_volume(),
                 )
                 await communicator.save(str(source))
 
@@ -1355,6 +1431,12 @@ class EdgeSpeechTTS:
         # familiar words-per-minute-like integer for the native engines.
         delta = round((self.rate / 185 - 1) * 100)
         return f"{delta:+d}%"
+
+    def _edge_pitch(self) -> str:
+        return f"{self.pitch_hz:+d}Hz"
+
+    def _edge_volume(self) -> str:
+        return f"{self.volume_percent:+d}%"
 
 
 class DirectoryMusicLibrary:

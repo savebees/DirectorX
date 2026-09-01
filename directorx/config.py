@@ -88,8 +88,6 @@ class LLMConfig(BaseModel):
 
 class TTSConfig(BaseModel):
     provider: Literal["edge"]
-    voice: str
-    rate: int = Field(gt=0)
     language: str = "zh-CN"
 
 

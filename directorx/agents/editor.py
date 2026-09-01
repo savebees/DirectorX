@@ -70,8 +70,18 @@ class EditorAgent:
         if not beat_ids or len(beat_ids) != len(set(beat_ids)):
             raise ValueError("Storyboard beat ids must be non-empty and unique")
         segments = {segment.beat_id: segment for segment in narration.segments}
-        if len(segments) != len(narration.segments) or set(segments) != set(beat_ids):
-            raise ValueError("Narration must contain exactly one segment per beat")
+        if len(segments) != len(narration.segments):
+            raise ValueError("Narration must not contain duplicate beat segments")
+        unknown_segments = set(segments) - set(beat_ids)
+        if unknown_segments:
+            raise ValueError("Narration references unknown storyboard beats")
+        voiced_beat_ids = {
+            beat.id for beat in storyboard.beats if beat.narration.strip()
+        }
+        if set(segments) != voiced_beat_ids:
+            raise ValueError(
+                "Narration must contain exactly one segment per spoken beat"
+            )
 
         clips_by_beat: dict[str, list[GroundedClip]] = defaultdict(list)
         shot_ids: set[str] = set()
@@ -79,7 +89,7 @@ class EditorAgent:
         for clip in grounding.clips:
             if clip.shot_id in shot_ids:
                 raise ValueError(f"Grounding repeats shot id {clip.shot_id}")
-            if clip.beat_id not in segments:
+            if clip.beat_id not in beat_ids:
                 raise ValueError(f"Grounding references unknown beat {clip.beat_id}")
             shot_ids.add(clip.shot_id)
             starts.append(clip.source_range.start_s)
@@ -111,7 +121,10 @@ class EditorAgent:
                 clip.source_range.duration_s + self.max_freeze_per_clip_s
                 for clip in beat_clips
             )
-            lower = segments[beat.id].duration_s + self.breathing_room_s
+            segment = segments.get(beat.id)
+            lower = (
+                segment.duration_s + self.breathing_room_s if segment is not None else 0
+            )
             if lower > capacity + 1e-6:
                 raise ValueError(
                     f"Beat {beat.id} needs {lower:.2f}s for narration but its "
@@ -167,7 +180,9 @@ class EditorAgent:
                     clip_ids=[clip.shot_id for clip in edited_clips],
                     start_s=cursor_s,
                     duration_s=duration_s,
-                    narration_duration_s=segments[beat.id].duration_s,
+                    narration_duration_s=(
+                        segments[beat.id].duration_s if beat.id in segments else 0
+                    ),
                 )
             )
             cursor_s += duration_s

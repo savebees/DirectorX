@@ -239,6 +239,20 @@ def test_screenplay_beat_accepts_up_to_three_source_sequences() -> None:
         Screenplay.model_validate({**_screenplay().model_dump(), "title": ""})
 
 
+def test_screenwriter_removes_visual_directions_from_spoken_narration() -> None:
+    assert (
+        ScreenwriterAgent._spoken_narration(
+            "詹姆斯·邦德，代号007。（片名浮现）（音乐渐强）"
+        )
+        == "詹姆斯·邦德，代号007。"
+    )
+    assert ScreenwriterAgent._spoken_narration("（片名浮现）") == ""
+    assert (
+        ScreenwriterAgent._spoken_narration("他选择留下（也许这是最后一次）。")
+        == "他选择留下（也许这是最后一次）。"
+    )
+
+
 def test_screenplay_plan_requires_unique_source_chronology(tmp_path: Path) -> None:
     _, _, summary = _source_artifacts(tmp_path)
     first = (

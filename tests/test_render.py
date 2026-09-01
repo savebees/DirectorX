@@ -249,6 +249,29 @@ def test_render_writes_subtitles_on_the_visual_timeline(tmp_path: Path) -> None:
     )
 
 
+def test_render_skips_subtitles_and_inserts_silence_for_visual_only_beat(
+    tmp_path: Path,
+) -> None:
+    task, *_ = _inputs(tmp_path)
+    grounding = GroundingManifest.model_validate_json(
+        task.input_artifacts[0].path.read_text()
+    )
+    narration = NarrationManifest.model_validate_json(
+        task.input_artifacts[1].path.read_text()
+    )
+    sound = SoundPlan.model_validate_json(task.input_artifacts[2].path.read_text())
+    plan = RenderAgent._build_plan(grounding, narration, sound, tmp_path / "final.mp4")
+    plan = plan.model_copy(update={"narration": plan.narration[:1]})
+    subtitle_path = tmp_path / "subtitles.srt"
+
+    RenderAgent._write_subtitles(plan, subtitle_path)
+    command = " ".join(FFmpegRenderer().command(plan))
+
+    assert "Narration beat-1" in subtitle_path.read_text(encoding="utf-8")
+    assert "Narration beat-2" not in subtitle_path.read_text(encoding="utf-8")
+    assert "anullsrc=r=48000:cl=mono,atrim=duration=1.000000" in command
+
+
 def test_render_agent_blocks_missing_audio(tmp_path: Path) -> None:
     task, *_ = _inputs(tmp_path, ("beat-1",))
     narration_path = task.input_artifacts[1].path

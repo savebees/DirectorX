@@ -63,8 +63,6 @@ screenwriter_fallback_structured_output_mode = "json_object"
 
 [tts]
 provider = "edge"
-voice = "zh-CN-XiaoxiaoNeural"
-rate = 160
 language = "zh-CN"
 
 [grounding]
@@ -82,7 +80,7 @@ embedding_model = "laion/larger_clap_music"
 device = "cpu"
 analysis_window_s = 10.0
 analysis_windows_per_track = 3
-gain_db = -23.0
+gain_db = -18.0
 duck_under_voice_db = -9.0
 
 [review]

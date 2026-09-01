@@ -215,10 +215,30 @@ class NarrationSegment(BaseModel):
     duration_s: float = Field(gt=0)
 
 
+class VoiceProfile(BaseModel):
+    voice_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    traits: list[str] = Field(min_length=1)
+    base_rate: int = Field(gt=0)
+    base_pitch_hz: int = Field(ge=-100, le=100)
+    volume_percent: int = Field(default=0, ge=-100, le=100)
+
+
+class NarrationDelivery(BaseModel):
+    voice_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    rate: int = Field(gt=0)
+    pitch_hz: int = Field(ge=-100, le=100)
+    volume_percent: int = Field(ge=-100, le=100)
+    matched_traits: list[str] = Field(default_factory=list)
+    rationale: str = Field(min_length=1)
+
+
 class NarrationManifest(BaseModel):
     segments: list[NarrationSegment]
     target_duration_s: float = Field(gt=0)
     duration_s: float = Field(gt=0)
+    delivery: NarrationDelivery | None = None
 
 
 class ShotRequest(BaseModel):
@@ -294,7 +314,7 @@ class TimelineBeat(BaseModel):
     clip_ids: list[str] = Field(min_length=1)
     start_s: float = Field(ge=0)
     duration_s: float = Field(gt=0)
-    narration_duration_s: float = Field(gt=0)
+    narration_duration_s: float = Field(ge=0)
 
     @property
     def end_s(self) -> float:

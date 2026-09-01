@@ -30,8 +30,8 @@ def test_project_config_loads_from_one_entrypoint() -> None:
 
     narration = create_narration_agent(config)
     assert isinstance(narration.tts, EdgeSpeechTTS)
-    assert narration.tts.voice == "zh-CN-XiaoxiaoNeural"
-    assert narration.tts.rate == 160
+    assert config.tts.model_dump() == {"provider": "edge", "language": "zh-CN"}
+    assert len(narration.tts.voice_profiles()) == 5
 
     sound = create_sound_agent(config)
     assert isinstance(sound.music_library, DirectoryMusicLibrary)

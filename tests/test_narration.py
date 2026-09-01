@@ -16,6 +16,7 @@ from directorx.core.models import (
     StoryBeat,
     Storyboard,
     VideoIndex,
+    VoiceProfile,
 )
 
 
@@ -43,6 +44,34 @@ class FakeTTS:
         if self.write_audio:
             output_path.write_bytes(b"fake wav")
         return self.durations.get(text, 1.0)
+
+
+class AdaptiveFakeTTS(FakeTTS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.delivery = None
+
+    def voice_profiles(self) -> list[VoiceProfile]:
+        return [
+            VoiceProfile(
+                voice_id="voice-dark",
+                display_name="Dark Voice",
+                traits=["dark", "serious", "mysterious"],
+                base_rate=165,
+                base_pitch_hz=-8,
+            ),
+            VoiceProfile(
+                voice_id="voice-neutral",
+                display_name="Neutral Voice",
+                traits=["neutral", "warm"],
+                base_rate=175,
+                base_pitch_hz=0,
+            ),
+        ]
+
+    def configure(self, delivery):
+        self.delivery = delivery
+        return self
 
 
 def _storyboard() -> Storyboard:
@@ -157,6 +186,47 @@ def test_longer_audio_is_measured_without_blocking(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert manifest.duration_s == 35
     assert manifest.target_duration_s == 12
+
+
+def test_narration_skips_silent_visual_beats(tmp_path: Path) -> None:
+    storyboard = _storyboard()
+    storyboard.beats[-1].narration = ""
+    tts = FakeTTS()
+
+    segments = asyncio.run(NarrationAgent(tts).run(storyboard, tmp_path / "audio"))
+
+    assert [segment.beat_id for segment in segments] == ["beat-1"]
+    assert [text for text, _ in tts.calls] == ["The station should have been busy."]
+
+
+def test_narration_agent_selects_and_records_voice_delivery(tmp_path: Path) -> None:
+    storyboard = _storyboard()
+    storyboard.narrative_angle = (
+        "A dark mysterious mission told with serious restraint."
+    )
+    storyboard.beats[0].mood = "dark suspense"
+    storyboard_path = tmp_path / "screenwriter" / "storyboard.json"
+    storyboard_path.parent.mkdir()
+    storyboard_path.write_text(storyboard.model_dump_json(), encoding="utf-8")
+    runtime = CoordinationRuntime(tmp_path / "coordination")
+    task = _task(storyboard_path, "narration-auto-voice")
+    runtime.delegate(AgentRole.DIRECTOR, task)
+    tts = AdaptiveFakeTTS()
+
+    result = asyncio.run(
+        NarrationAgent(tts).run_task(task, runtime, tmp_path / "artifacts")
+    )
+    manifest = NarrationManifest.model_validate_json(
+        (tmp_path / "artifacts/narration/narration.json").read_text()
+    )
+
+    assert result.status == "completed"
+    assert manifest.delivery is not None
+    assert manifest.delivery.voice_id == "voice-dark"
+    assert manifest.delivery.rate == 160
+    assert manifest.delivery.pitch_hz == -10
+    assert {"dark", "serious", "mysterious"}.issubset(manifest.delivery.matched_traits)
+    assert tts.delivery == manifest.delivery
 
 
 def test_narration_persists_blocked_result_and_cleans_up_after_tts_failure(

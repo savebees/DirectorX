@@ -292,8 +292,15 @@ class SoundAgent:
         if len(beat_ids) != len(set(beat_ids)):
             raise ValueError("Storyboard beat ids must be unique")
         segments = {segment.beat_id: segment for segment in narration.segments}
-        if len(segments) != len(narration.segments) or set(segments) != set(beat_ids):
-            raise ValueError("Narration must contain exactly one segment per beat")
+        if len(segments) != len(narration.segments):
+            raise ValueError("Narration must not contain duplicate beat segments")
+        voiced_beat_ids = {
+            beat.id for beat in storyboard.beats if beat.narration.strip()
+        }
+        if set(segments) != voiced_beat_ids:
+            raise ValueError(
+                "Narration must contain exactly one segment per spoken beat"
+            )
         if not math.isclose(
             narration.duration_s,
             sum(segment.duration_s for segment in narration.segments),
@@ -306,7 +313,10 @@ class SoundAgent:
             mood = beat.mood.strip()
             if not mood:
                 raise ValueError(f"Storyboard beat {beat.id} has an empty mood")
-            weights[mood] += segments[beat.id].duration_s
+            segment = segments.get(beat.id)
+            weights[mood] += (
+                segment.duration_s if segment is not None else beat.target_duration_s
+            )
         return dict(weights)
 
     @staticmethod

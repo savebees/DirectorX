@@ -28,6 +28,24 @@ from directorx.indexing import validate_story_summary
 
 class ScreenwriterAgent:
     role = AgentRole.SCREENWRITER
+    _STAGE_DIRECTION = re.compile(r"[（(\[]([^（）()\[\]]{1,60})[）)\]]")
+    _STAGE_DIRECTION_MARKERS = (
+        "片名",
+        "字幕",
+        "画面",
+        "镜头",
+        "淡入",
+        "淡出",
+        "浮现",
+        "出现",
+        "音乐",
+        "音效",
+        "title",
+        "shot",
+        "visual",
+        "music",
+        "sfx",
+    )
 
     def __init__(
         self, model: ScreenwriterModel, artifacts_dir: Path | None = None
@@ -239,13 +257,17 @@ class ScreenwriterAgent:
         if set(narration_by_id) != {beat.id for beat in screenplay.beats}:
             return screenplay
         weights = [
-            ScreenwriterAgent._spoken_units(narration_by_id[beat.id])
+            ScreenwriterAgent._spoken_units(
+                ScreenwriterAgent._spoken_narration(narration_by_id[beat.id])
+            )
             for beat in screenplay.beats
         ]
         available_s = screenplay.target_duration_s - breathing_room_s * len(weights)
         if available_s <= 0:
             return screenplay
         weight_sum = sum(weights)
+        if weight_sum == 0:
+            return screenplay
         desired = [
             breathing_room_s + available_s * weight / weight_sum for weight in weights
         ]
@@ -329,7 +351,9 @@ class ScreenwriterAgent:
         beats: list[StoryBeat] = []
         for screenplay_beat in screenplay.beats:
             narration_beat = narration_by_id[screenplay_beat.id]
-            ScreenwriterAgent._require_text(narration_beat.narration)
+            narration_text = ScreenwriterAgent._spoken_narration(
+                narration_beat.narration
+            )
             evidence_ids = narration_beat.evidence_scene_ids
             if not evidence_ids:
                 raise ValueError(
@@ -353,7 +377,7 @@ class ScreenwriterAgent:
                     id=screenplay_beat.id,
                     purpose=screenplay_beat.purpose,
                     story_content=screenplay_beat.story_content,
-                    narration=narration_beat.narration,
+                    narration=narration_text,
                     visual_intent=screenplay_beat.visual_intent,
                     mood=screenplay_beat.mood,
                     target_duration_s=screenplay_beat.target_duration_s,
@@ -365,7 +389,7 @@ class ScreenwriterAgent:
             title=screenplay.title,
             logline=screenplay.logline,
             narrative_angle=screenplay.narrative_angle,
-            full_narration=narration.full_narration,
+            full_narration="".join(beat.narration for beat in beats),
             beats=beats,
             target_duration_s=screenplay.target_duration_s,
         )
@@ -409,6 +433,19 @@ class ScreenwriterAgent:
             raise ValueError(
                 "Screenwriter output contains an empty required text field"
             )
+
+    @classmethod
+    def _spoken_narration(cls, text: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            content = match.group(1).strip().casefold()
+            if any(marker in content for marker in cls._STAGE_DIRECTION_MARKERS):
+                return ""
+            return match.group(0)
+
+        cleaned = cls._STAGE_DIRECTION.sub(replace, text)
+        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = re.sub(r"\s+([，。！？；：,.!?;:])", r"\1", cleaned)
+        return cleaned.strip()
 
     @staticmethod
     def _persist_storyboard(storyboard: Storyboard, artifacts_dir: Path) -> Path:

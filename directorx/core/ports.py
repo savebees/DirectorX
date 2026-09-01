@@ -11,6 +11,7 @@ from .models import (
     Keyframe,
     MusicIndex,
     MusicTrack,
+    NarrationDelivery,
     NarrationDraft,
     RenderPlan,
     ReviewReport,
@@ -23,6 +24,7 @@ from .models import (
     StorySummary,
     TimeRange,
     VideoIndex,
+    VoiceProfile,
 )
 
 
@@ -86,6 +88,10 @@ class StoryStructureModel(Protocol):
 
 
 class TextToSpeech(Protocol):
+    def voice_profiles(self) -> list[VoiceProfile]: ...
+
+    def configure(self, delivery: NarrationDelivery) -> TextToSpeech: ...
+
     async def synthesize(self, text: str, output_path: Path) -> float:
         """Write audio and return its measured duration in seconds."""
         ...

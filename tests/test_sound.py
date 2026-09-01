@@ -143,6 +143,18 @@ def _provider() -> FixedAudioTextEmbeddingProvider:
     )
 
 
+def test_sound_includes_the_mood_of_a_silent_visual_beat(tmp_path: Path) -> None:
+    storyboard = _storyboard()
+    storyboard.beats[-1].narration = ""
+    narration = _narration(tmp_path)
+    narration.segments.pop()
+    narration.duration_s = narration.segments[0].duration_s
+
+    weights = SoundAgent._mood_weights(storyboard, narration)
+
+    assert weights == {"uneasy": 18, "tense": 7}
+
+
 def test_director_delegates_and_sound_selects_one_track_from_artifacts(
     tmp_path: Path,
 ) -> None:

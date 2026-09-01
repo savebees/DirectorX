@@ -173,11 +173,14 @@ class RenderAgent:
         else:
             clips = list(timeline.clips)
             beats = list(timeline.beats)
-            if [beat.beat_id for beat in beats] != [
-                segment.beat_id for segment in segments
-            ]:
+            timeline_beat_ids = [beat.beat_id for beat in beats]
+            if not set(segments_by_beat).issubset(timeline_beat_ids):
+                raise ValueError("Narration references an unknown timeline beat")
+            if [
+                beat_id for beat_id in timeline_beat_ids if beat_id in segments_by_beat
+            ] != [segment.beat_id for segment in segments]:
                 raise ValueError(
-                    "Timeline beats and narration must have identical ordering"
+                    "Narration must preserve the order of spoken timeline beats"
                 )
             if [clip.shot_id for clip in clips] != [
                 clip_id for beat in beats for clip_id in beat.clip_ids
@@ -217,17 +220,19 @@ class RenderAgent:
     def _write_subtitles(cls, plan: RenderPlan, path: Path) -> None:
         cursor_s = 0.0
         entries: list[str] = []
-        for index, (beat, narration) in enumerate(
-            zip(plan.beats, plan.narration, strict=True),
-            start=1,
-        ):
+        narration_by_beat = cls._unique_by_beat(plan.narration, "narration")
+        for beat in plan.beats:
+            narration = narration_by_beat.get(beat.beat_id)
+            if narration is None:
+                cursor_s += beat.duration_s
+                continue
             start_s = cursor_s
             end_s = start_s + min(narration.duration_s, beat.duration_s)
             text = narration.text.strip().replace("\r", " ").replace("\n", " ")
             if not text:
                 raise ValueError(f"Narration text is empty for {narration.beat_id}")
             entries.append(
-                f"{index}\n{cls._srt_timestamp(start_s)} --> "
+                f"{len(entries) + 1}\n{cls._srt_timestamp(start_s)} --> "
                 f"{cls._srt_timestamp(end_s)}\n{text}\n"
             )
             cursor_s += beat.duration_s

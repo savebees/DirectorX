@@ -131,8 +131,7 @@ def create_director(
 def create_narration_agent(config: AppConfig) -> NarrationAgent:
     return NarrationAgent(
         EdgeSpeechTTS(
-            voice=config.tts.voice,
-            rate=config.tts.rate,
+            language=config.tts.language,
         ),
         min_voice_coverage=config.edit.min_voice_coverage,
         max_voice_coverage=config.edit.max_voice_coverage,

@@ -89,12 +89,22 @@ class FFmpegRenderer:
         else:
             video_map = "[vout]"
 
+        narration_inputs = {
+            narration.beat_id: (idx, narration)
+            for idx, narration in enumerate(plan.narration, start=1)
+        }
         narration_labels: list[str] = []
-        for idx, (narration, beat) in enumerate(
-            zip(plan.narration, plan.beats, strict=True),
-            start=1,
-        ):
-            label = f"n{idx - 1}"
+        for beat_index, beat in enumerate(plan.beats):
+            label = f"n{beat_index}"
+            item = narration_inputs.get(beat.beat_id)
+            if item is None:
+                filters.append(
+                    f"anullsrc=r=48000:cl=mono,atrim=duration={beat.duration_s:.6f},"
+                    f"asetpts=PTS-STARTPTS[{label}]"
+                )
+                narration_labels.append(f"[{label}]")
+                continue
+            input_index, narration = item
             silence_duration = max(
                 0.0,
                 beat.duration_s - narration.duration_s,
@@ -105,7 +115,8 @@ class FFmpegRenderer:
                 else ""
             )
             filters.append(
-                f"[{idx}:a]aresample=48000,atrim=duration={narration.duration_s:.6f},"
+                f"[{input_index}:a]aresample=48000,"
+                f"atrim=duration={narration.duration_s:.6f},"
                 f"asetpts=PTS-STARTPTS{padding},"
                 f"atrim=duration={beat.duration_s:.6f}[{label}]"
             )
